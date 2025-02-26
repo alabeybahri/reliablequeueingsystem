@@ -3,41 +3,85 @@ import common.Message;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Broker {
     private int port;
-    private Map<String, List<Integer>> queues;           // Queue name -> list of messages
-    private Map<String, Map<String, Integer>> offsets;   // Queue name -> (clientId -> offset)
+    Map<String, List<Integer>> queues = new ConcurrentHashMap<>();
+    public Map<String, Map<String, Integer>> clientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
+    private Set<String> currentClients = ConcurrentHashMap.newKeySet();
+    private boolean isLeader;
 
-    public Broker(int port) {
+    public Broker(int port, boolean isLeader) {
         this.port = port;
-        this.queues = new HashMap<>();
-        this.offsets = new HashMap<>();
+        this.isLeader = isLeader;
     }
 
     public void start() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Broker started on port " + port);
+            System.out.println("Broker started on port " + port + (isLeader ? " (Leader)" : ""));
             while (true) {
                 Socket socket = serverSocket.accept();
-                new Thread(() -> handleClient(socket)).start();
+                String clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+                currentClients.add(clientId);
+                System.out.println("Client connected: " + clientId);
+                new Thread(new ClientHandler(socket, clientId, this)).start();
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    private void handleClient(Socket socket) {
+    public synchronized void removeClient(String clientId) {
+        currentClients.remove(clientId);
+        clientOffsets.remove(clientId);
+        System.out.println("Client disconnected: " + clientId);
+    }
+
+    public static void main(String[] args) {
+        int port = Integer.parseInt(args[0]);
+        // Leader is the broker with the highest port (e.g., 5002)
+        boolean isLeader = port == 5002;
+        Broker broker = new Broker(port, isLeader);
+        broker.start();
+    }
+}
+
+class ClientHandler implements Runnable {
+    private Socket socket;
+    private String clientId;
+    private Broker broker;
+    private ObjectInputStream in;
+    private ObjectOutputStream out;
+
+    public ClientHandler(Socket socket, String clientId, Broker broker) {
+        this.socket = socket;
+        this.clientId = clientId;
+        this.broker = broker;
         try {
-            ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
-            Message request = (Message) in.readObject();
-            Message response = processRequest(request);
-            ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-            out.writeObject(response);
-            out.flush();
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            while (true) {
+                Message request = (Message) in.readObject();
+                if (request == null) break;
+                Message response = processRequest(request);
+                out.writeObject(response);
+                out.flush();
+            }
+        } catch (EOFException e) {
+            // Client disconnected
         } catch (IOException | ClassNotFoundException e) {
             e.printStackTrace();
         } finally {
+            broker.removeClient(clientId);
             try {
                 socket.close();
             } catch (IOException e) {
@@ -49,50 +93,55 @@ public class Broker {
     private Message processRequest(Message request) {
         String type = request.getType();
         String queueName = request.getQueueName();
-        Message response;
+        Message response = new Message();
+        response.setResponseType("success");
 
-        // Synchronize to ensure thread safety
-        synchronized (this) {
-            if ("create".equals(type)) {
-                if (!queues.containsKey(queueName)) {
-                    queues.put(queueName, new ArrayList<>());
-                    offsets.put(queueName, new HashMap<>());
-                    response = new Message("success", "Queue created", null);
-                } else {
-                    response = new Message("error", "Queue already exists", null);
-                }
-            } else if ("append".equals(type)) {
-                if (queues.containsKey(queueName)) {
-                    queues.get(queueName).add(request.getData());
-                    response = new Message("success", "Appended successfully", null);
-                } else {
-                    response = new Message("error", "Queue does not exist", null);
-                }
-            } else if ("read".equals(type)) {
-                if (queues.containsKey(queueName)) {
-                    Map<String, Integer> clientOffsets = offsets.get(queueName);
-                    String clientId = request.getClientId();
-                    int offset = clientOffsets.getOrDefault(clientId, 0);
-                    List<Integer> queue = queues.get(queueName);
-                    if (offset < queue.size()) {
-                        Integer value = queue.get(offset);
-                        clientOffsets.put(clientId, offset + 1);
-                        response = new Message("success", null, value);
+        switch (type) {
+            case "create":
+                synchronized (broker.queues) {
+                    if (!broker.queues.containsKey(queueName)) {
+                        broker.queues.put(queueName, new ArrayList<>());
+                        response.setResponseMessage("Queue created");
                     } else {
-                        response = new Message("success", "No more messages", null);
+                        response.setResponseType("error");
+                        response.setResponseMessage("Queue already exists");
                     }
-                } else {
-                    response = new Message("error", "Queue does not exist", null);
                 }
-            } else {
-                response = new Message("error", "Invalid request type", null);
-            }
+                break;
+            case "write":
+                synchronized (broker.queues) {
+                    if (broker.queues.containsKey(queueName)) {
+                        broker.queues.get(queueName).add(request.getValue());
+                        response.setResponseMessage("Written successfully");
+                    } else {
+                        response.setResponseType("error");
+                        response.setResponseMessage("Queue does not exist");
+                    }
+                }
+                break;
+            case "read":
+                synchronized (broker.queues) {
+                    if (broker.queues.containsKey(queueName)) {
+                        List<Integer> queue = broker.queues.get(queueName);
+                        Map<String, Integer> offsets = broker.clientOffsets.computeIfAbsent(clientId, k -> new HashMap<>());
+                        int offset = offsets.getOrDefault(queueName, 0);
+                        if (offset < queue.size()) {
+                            Integer value = queue.get(offset);
+                            offsets.put(queueName, offset + 1);
+                            response.setResponseData(value);
+                        } else {
+                            response.setResponseMessage("No more messages");
+                        }
+                    } else {
+                        response.setResponseType("error");
+                        response.setResponseMessage("Queue does not exist");
+                    }
+                }
+                break;
+            default:
+                response.setResponseType("error");
+                response.setResponseMessage("Invalid request type");
         }
         return response;
-    }
-
-    public static void main(String[] args) {
-        Broker broker = new Broker(5001);
-        broker.start();
     }
 }

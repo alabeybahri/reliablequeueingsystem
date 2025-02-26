@@ -2,75 +2,85 @@ package client;
 import common.Message;
 import java.io.*;
 import java.net.*;
+import java.util.Scanner;
 
 public class Client {
-    private String brokerAddress;
-    private int brokerPort;
+    private Socket socket;
+    private ObjectOutputStream out;
+    private ObjectInputStream in;
 
     public Client(String brokerAddress, int brokerPort) {
-        this.brokerAddress = brokerAddress;
-        this.brokerPort = brokerPort;
-    }
-
-    private Message sendRequest(Message request) {
         try {
-            Socket socket = new Socket(brokerAddress, brokerPort);
-            ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-            out.writeObject(request);
-            out.flush();
-            ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
-            Message response = (Message) in.readObject();
-            socket.close();
-            return response;
-        } catch (IOException | ClassNotFoundException e) {
+            socket = new Socket(brokerAddress, brokerPort);
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
+            System.out.println("Connected to broker at " + brokerAddress + ":" + brokerPort);
+        } catch (IOException e) {
             e.printStackTrace();
-            return null;
         }
     }
 
-    public void createQueue(String queueName) {
-        Message request = new Message("create", queueName, null, null);
-        Message response = sendRequest(request);
-        if (response != null) {
-            System.out.println("Create queue: " + response.getResponseType() + " - " + response.getResponseMessage());
-        }
-    }
+    public void start() {
+        Scanner scanner = new Scanner(System.in);
+        while (true) {
+            System.out.print("> ");
+            String line = scanner.nextLine().trim();
+            if (line.isEmpty()) continue;
+            String[] parts = line.split(" ");
+            String command = parts[0];
+            Message request = new Message();
 
-    public void append(String queueName, Integer value) {
-        Message request = new Message("append", queueName, null, value);
-        Message response = sendRequest(request);
-        if (response != null) {
-            System.out.println("Append: " + response.getResponseType() + " - " + response.getResponseMessage());
-        }
-    }
-
-    public Integer read(String queueName, String clientId) {
-        Message request = new Message("read", queueName, clientId, null);
-        Message response = sendRequest(request);
-        if (response != null) {
-            if ("success".equals(response.getResponseType())) {
-                if (response.getResponseData() != null) {
-                    System.out.println("Read value: " + response.getResponseData());
-                    return response.getResponseData();
-                } else {
-                    System.out.println("No more messages");
-                    return null;
+            try {
+                switch (command) {
+                    case "create":
+                        if (parts.length != 2) {
+                            System.out.println("Usage: create <queue_name>");
+                            continue;
+                        }
+                        request.setType("create");
+                        request.setQueueName(parts[1]);
+                        break;
+                    case "read":
+                        if (parts.length != 2) {
+                            System.out.println("Usage: read <queue_name>");
+                            continue;
+                        }
+                        request.setType("read");
+                        request.setQueueName(parts[1]);
+                        break;
+                    case "write":
+                        if (parts.length != 3) {
+                            System.out.println("Usage: write <queue_name> <value>");
+                            continue;
+                        }
+                        request.setType("write");
+                        request.setQueueName(parts[1]);
+                        request.setValue(Integer.parseInt(parts[2]));
+                        break;
+                    default:
+                        System.out.println("Invalid command. Use: create, read, write");
+                        continue;
                 }
-            } else {
-                System.out.println("Read error: " + response.getResponseMessage());
-                return null;
+                out.writeObject(request);
+                out.flush();
+                Message response = (Message) in.readObject();
+                if ("success".equals(response.getResponseType())) {
+                    if (response.getResponseData() != null) {
+                        System.out.println("Received: " + response.getResponseData());
+                    } else {
+                        System.out.println(response.getResponseMessage());
+                    }
+                } else {
+                    System.out.println("Error: " + response.getResponseMessage());
+                }
+            } catch (Exception e) {
+                System.out.println("Error: " + e.getMessage());
             }
         }
-        return null;
     }
 
     public static void main(String[] args) {
-        Client client = new Client("localhost", 5001);
-        client.createQueue("testQueue");
-//        client.append("testQueue", 42);
-//        client.append("testQueue", 100);
-        client.read("testQueue", "client1");
-        client.read("testQueue", "client1");
-        client.read("testQueue", "client1"); // Should indicate no more messages
+        Client client = new Client("localhost", 5001); // Connect to broker on port 5000
+        client.start();
     }
 }
