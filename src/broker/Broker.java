@@ -88,7 +88,7 @@ public class Broker {
             try {
                 MulticastSocket multicastSocket = new MulticastSocket(CLIENT_MULTICAST_PORT);
                 InetAddress mcastaddr = InetAddress.getByName(CLIENT_MULTICAST_ADDRESS);
-                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
+                NetworkInterface netIf = NetworkInterface.getByInetAddress(LocalIP.getLocalIP());
                 multicastSocket.joinGroup(new InetSocketAddress(mcastaddr, CLIENT_MULTICAST_PORT), netIf);
                 System.out.println("Broker listening for multicast discovery on " + CLIENT_MULTICAST_ADDRESS + ":" + CLIENT_MULTICAST_PORT);
 
@@ -119,10 +119,11 @@ public class Broker {
     private void createBrokerMulticastSocket() throws IOException {
         brokerMulticastSocket = new MulticastSocket(BROKER_MULTICAST_PORT);
         InetAddress mcastaddr = InetAddress.getByName(BROKER_MULTICAST_ADDRESS);
-        NetworkInterface netIf = NetworkInterface.getByName("en0");
         InetSocketAddress group = new InetSocketAddress(mcastaddr, BROKER_MULTICAST_PORT);
-        brokerMulticastSocket.joinGroup(group, netIf);
+        // We don't know why this works, but if we try to put a valid network interface, it doesnt work sometimes (randomly we guess)
+        brokerMulticastSocket.joinGroup(group, null);
         brokerMulticastSocket.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, false);
+        brokerMulticastSocket.setOption(StandardSocketOptions.SO_REUSEADDR, true);
         brokerGroup = group;
     }
 
@@ -139,7 +140,7 @@ public class Broker {
                     String message = new String(packet.getData(), 0, packet.getLength());
                     String[] messageArray = message.split("\n");
 
-                    if (messageArray[0].equals("PING_BROKERS") && !(packet.getAddress().equals(LocalIP.getLocalIP())) && !(Integer.parseInt(messageArray[1]) == (port))) {
+                    if (messageArray[0].equals("PING_BROKERS") && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (Integer.parseInt(messageArray[1]) == (port)))) {
                         sendPingResponse();
                         registerBroker(packet.getAddress().getHostAddress(),messageArray[1]);
                     }
@@ -152,8 +153,10 @@ public class Broker {
 
     private void registerBroker(String host, String port) {
         String brokerInfo = host + ":" + port;
+        System.out.println("Discovered broker: " + brokerInfo);
         if (!knownBrokers.contains(brokerInfo)) {
             knownBrokers.add(brokerInfo);
+            System.out.println("Broker registered for " + brokerInfo);
         }
     }
 }
