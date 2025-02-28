@@ -127,14 +127,11 @@ public class Client {
                     byte[] buffer = new byte[256];
                     DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
                     multicastSocket.receive(responsePacket);
-                    String response = new String(responsePacket.getData(), 0, responsePacket.getLength());
-                    String[] parts = response.split(":");
-                    if (parts.length == 2) {
-                        String host = parts[0];
-                        int port = Integer.parseInt(parts[1]);
-                        brokerCache.add(new Address(host, port));
-                        System.out.println("Discovered broker at " + host + ":" + port);
-                    }
+                    Integer brokerHost = Integer.parseInt(new String(responsePacket.getData(), 0, responsePacket.getLength()));
+                    String brokerIP = responsePacket.getAddress().getHostAddress();
+                    brokerCache.add(new Address(brokerIP, brokerHost));
+                    System.out.println("Discovered broker at " + brokerIP + ":" + brokerHost);
+
                 } catch (SocketTimeoutException e) {
                     System.out.println("Discovery complete. Found " + brokerCache.size() + " brokers.");
                     break; // Stop after timeout
