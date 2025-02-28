@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import common.LocalIP;
 
 public class Broker {
     private int port;
@@ -18,7 +19,7 @@ public class Broker {
 
     private static final String CLIENT_MULTICAST_ADDRESS = "239.255.0.2";
     private static final int CLIENT_MULTICAST_PORT = 5010;
-    private static final String BROKER_MULTICAST_ADDRESS = "224.0.0.1";
+    private static final String BROKER_MULTICAST_ADDRESS = "239.255.0.1";
     private static final int BROKER_MULTICAST_PORT = 5020;
     private static final int DISCOVERY_TIMEOUT = 1000; // 1 second timeout
 
@@ -66,7 +67,7 @@ public class Broker {
     }
 
     private void sendPingRequest() throws IOException {
-        String message = "PING_BROKERS";
+        String message = "PING_BROKERS" + System.lineSeparator() + port;
         byte[] messageBytes = message.getBytes();
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
@@ -118,7 +119,7 @@ public class Broker {
     private void createBrokerMulticastSocket() throws IOException {
         brokerMulticastSocket = new MulticastSocket(BROKER_MULTICAST_PORT);
         InetAddress mcastaddr = InetAddress.getByName(BROKER_MULTICAST_ADDRESS);
-        NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
+        NetworkInterface netIf = NetworkInterface.getByName("en0");
         InetSocketAddress group = new InetSocketAddress(mcastaddr, BROKER_MULTICAST_PORT);
         brokerMulticastSocket.joinGroup(group, netIf);
         brokerMulticastSocket.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, false);
@@ -136,11 +137,11 @@ public class Broker {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     brokerMulticastSocket.receive(packet);
                     String message = new String(packet.getData(), 0, packet.getLength());
+                    String[] messageArray = message.split("\n");
 
-                    if ("PING_BROKERS".equals(message)) {
+                    if (messageArray[0].equals("PING_BROKERS") && !(packet.getAddress().equals(LocalIP.getLocalIP())) && !(Integer.parseInt(messageArray[1]) == (port))) {
                         sendPingResponse();
-                    } else {
-                        registerBroker(packet);
+                        registerBroker(packet.getAddress().getHostAddress(),messageArray[1]);
                     }
                 }
             } catch (IOException e) {
@@ -149,10 +150,10 @@ public class Broker {
         }).start();
     }
 
-    private void registerBroker(DatagramPacket packet) {
-        String brokerInfo = packet.getAddress().getHostAddress() + ":" + new String(packet.getData(), 0, packet.getLength());
-        if (!brokerInfo.equals(port) && knownBrokers.add(brokerInfo)) {
-            System.out.println("Discovered broker: " + brokerInfo);
+    private void registerBroker(String host, String port) {
+        String brokerInfo = host + ":" + port;
+        if (!knownBrokers.contains(brokerInfo)) {
+            knownBrokers.add(brokerInfo);
         }
     }
 }
