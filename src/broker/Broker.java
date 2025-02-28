@@ -11,7 +11,7 @@ public class Broker {
     private Set<String> currentClients = ConcurrentHashMap.newKeySet();
 
 
-    private static final String MULTICAST_ADDRESS = "224.0.0.1";;
+    private static final String MULTICAST_ADDRESS = "224.0.0.1";
     private static final int MULTICAST_PORT = 5010;
 
     public Broker(int port) {
@@ -45,9 +45,7 @@ public class Broker {
             try {
                 MulticastSocket multicastSocket = new MulticastSocket(MULTICAST_PORT);
                 InetAddress mcastaddr = InetAddress.getByName(MULTICAST_ADDRESS);
-                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLoopbackAddress());
-                //NetworkInterface ni = NetworkInterface.getByInetAddress(InetAddress.getLoopbackAddress());
-                //multicastSocket.setNetworkInterface(ni);
+                NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
                 multicastSocket.joinGroup(new InetSocketAddress(mcastaddr, MULTICAST_PORT), netIf);
                 System.out.println("Broker listening for multicast discovery on " + MULTICAST_ADDRESS + ":" + MULTICAST_PORT);
 
@@ -58,7 +56,7 @@ public class Broker {
                     multicastSocket.receive(packet);
                     String message = new String(packet.getData(), 0, packet.getLength());
                     if ("DISCOVER_BROKERS".equals(message)) {
-                        String response = InetAddress.getLocalHost().getHostAddress() + ":" + port;
+                        String response = String.valueOf(port);
                         byte[] responseBytes = response.getBytes();
                         DatagramPacket responsePacket = new DatagramPacket(
                                 responseBytes, responseBytes.length, packet.getAddress(), packet.getPort()
