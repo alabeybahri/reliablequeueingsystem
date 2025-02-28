@@ -16,14 +16,15 @@ public class Broker {
     private InetSocketAddress brokerGroup;
     private List<String> knownBrokers;
 
-    private static final String CLIENT_MULTICAST_ADDRESS = "224.0.0.1";
+    private static final String CLIENT_MULTICAST_ADDRESS = "239.255.0.2";
     private static final int CLIENT_MULTICAST_PORT = 5010;
-    private static final String BROKER_MULTICAST_ADDRESS = "224.0.0.2";
+    private static final String BROKER_MULTICAST_ADDRESS = "224.0.0.1";
     private static final int BROKER_MULTICAST_PORT = 5020;
     private static final int DISCOVERY_TIMEOUT = 1000; // 1 second timeout
 
     public Broker(int port) throws IOException {
         this.port = port;
+        this.knownBrokers = new ArrayList<>();
         startMulticastListener();
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
@@ -56,12 +57,12 @@ public class Broker {
 
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                Thread.sleep(random.nextInt(10000)); // Random delay between 0-10s
+                Thread.sleep(random.nextInt(2000)); // Random delay between 0-10s
                 sendPingRequest();
             } catch (InterruptedException | IOException e) {
                 e.printStackTrace();
             }
-        }, 0, 10, TimeUnit.SECONDS);
+        }, 0, 2, TimeUnit.SECONDS);
     }
 
     private void sendPingRequest() throws IOException {
@@ -70,12 +71,13 @@ public class Broker {
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
         System.out.println("Sent ping request to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
+
     }
 
-    private void sendPingResponse(InetAddress address, int port) throws IOException {
+    private void sendPingResponse() throws IOException {
         String response = String.valueOf(port);
         byte[] responseBytes = response.getBytes();
-        DatagramPacket responsePacket = new DatagramPacket(responseBytes, responseBytes.length, address, port);
+        DatagramPacket responsePacket = new DatagramPacket(responseBytes, responseBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(responsePacket);
         System.out.println("Responded to ping request with " + response);
     }
@@ -114,14 +116,13 @@ public class Broker {
     }
 
     private void createBrokerMulticastSocket() throws IOException {
-        MulticastSocket multicastSocket = new MulticastSocket(BROKER_MULTICAST_PORT);
+        brokerMulticastSocket = new MulticastSocket(BROKER_MULTICAST_PORT);
         InetAddress mcastaddr = InetAddress.getByName(BROKER_MULTICAST_ADDRESS);
         NetworkInterface netIf = NetworkInterface.getByInetAddress(InetAddress.getLocalHost());
         InetSocketAddress group = new InetSocketAddress(mcastaddr, BROKER_MULTICAST_PORT);
-        multicastSocket.joinGroup(group, netIf);
-        multicastSocket.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, false);
+        brokerMulticastSocket.joinGroup(group, netIf);
+        brokerMulticastSocket.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, false);
         brokerGroup = group;
-        brokerMulticastSocket = multicastSocket;
     }
 
 
@@ -137,7 +138,7 @@ public class Broker {
                     String message = new String(packet.getData(), 0, packet.getLength());
 
                     if ("PING_BROKERS".equals(message)) {
-                        sendPingResponse(packet.getAddress(), packet.getPort());
+                        sendPingResponse();
                     } else {
                         registerBroker(packet);
                     }
