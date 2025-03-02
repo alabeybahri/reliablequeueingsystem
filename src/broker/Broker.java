@@ -34,7 +34,7 @@ public class Broker {
 
     public void start() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Broker started on port " + port);
+            System.out.println("[INFO]: [Broker: " + port +  "] Started");
             while (true) {
                 Socket socket = serverSocket.accept();
                 String clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
@@ -71,7 +71,7 @@ public class Broker {
         byte[] messageBytes = message.getBytes();
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
-        System.out.println("Sent ping request to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
+        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
 
     }
 
@@ -80,7 +80,7 @@ public class Broker {
         byte[] responseBytes = response.getBytes();
         DatagramPacket responsePacket = new DatagramPacket(responseBytes, responseBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(responsePacket);
-        System.out.println("Responded to ping request with " + response);
+        System.out.println("[INFO]: [Broker: " + port + "] Responded to ping request with " + response);
     }
 
     private void startMulticastListener() {
@@ -90,7 +90,7 @@ public class Broker {
                 InetAddress mcastaddr = InetAddress.getByName(CLIENT_MULTICAST_ADDRESS);
                 NetworkInterface netIf = NetworkInterface.getByInetAddress(LocalIP.getLocalIP());
                 multicastSocket.joinGroup(new InetSocketAddress(mcastaddr, CLIENT_MULTICAST_PORT), netIf);
-                System.out.println("Broker listening for multicast discovery on " + CLIENT_MULTICAST_ADDRESS + ":" + CLIENT_MULTICAST_PORT);
+                System.out.println("[INFO]: [Broker: " + port +  "] Listening client discovery on " + CLIENT_MULTICAST_ADDRESS + ":" + CLIENT_MULTICAST_PORT);
 
 
                 while (true) {
@@ -105,7 +105,7 @@ public class Broker {
                                 responseBytes, responseBytes.length, packet.getAddress(), packet.getPort()
                         );
                         multicastSocket.send(responsePacket);
-                        System.out.println("Responded to discovery request with " + response);
+                        System.out.println("[INFO]: [Broker: \" + port +  \"] Responded to discovery request with " + response);
                     }
 
                 }
@@ -132,7 +132,7 @@ public class Broker {
     private void startBrokerMulticastListener() {
         new Thread(() -> {
             try {
-                System.out.println("Broker listening for multicast ping on " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
+                System.out.println("[INFO]: [Broker: " + port +  "] Listening other brokers on " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
                 while (true) {
                     byte[] buffer = new byte[256];
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
@@ -153,10 +153,10 @@ public class Broker {
 
     private void registerBroker(String host, String port) {
         String brokerInfo = host + ":" + port;
-        System.out.println("Discovered broker: " + brokerInfo);
+        System.out.println("[INFO]: [Broker: " + this.port +  "] Received response from " + brokerInfo);
         if (!knownBrokers.contains(brokerInfo)) {
             knownBrokers.add(brokerInfo);
-            System.out.println("Broker registered for " + brokerInfo);
+            System.out.println("[INFO]: [Broker: " + this.port +  "] Registered broker " + brokerInfo);
         }
     }
 }
