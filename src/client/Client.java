@@ -174,7 +174,7 @@ public class Client {
             // Receive responses
             while (true) {
                 try {
-                    byte[] buffer = new byte[256];
+                    byte[] buffer = new byte[1024];
                     DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
                     multicastSocket.receive(responsePacket);
                     Integer brokerHost = Integer.parseInt(new String(responsePacket.getData(), 0, responsePacket.getLength()));

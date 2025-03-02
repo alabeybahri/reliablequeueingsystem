@@ -7,15 +7,21 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+
+import common.InterBrokerMessage;
+import common.Address;
 import common.LocalIP;
 
 public class Broker {
     private int port;
+    public Address brokerAddress;
     Map<String, List<Integer>> queues = new ConcurrentHashMap<>();
     public Map<String, Map<String, Integer>> clientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
     private MulticastSocket brokerMulticastSocket;
     private InetSocketAddress brokerGroup;
     private List<String> knownBrokers;
+    public Map<String, Address> queueAddressMap = new ConcurrentHashMap<>();
+    public Map<String, Map<String, Integer>> clientOffsetAddressMap = new ConcurrentHashMap<>();
 
     private static final String CLIENT_MULTICAST_ADDRESS = "239.255.0.2";
     private static final int CLIENT_MULTICAST_PORT = 5010;
@@ -26,6 +32,7 @@ public class Broker {
     public Broker(int port) throws IOException {
         this.port = port;
         this.knownBrokers = new ArrayList<>();
+        this.brokerAddress = new Address(LocalIP.getLocalIP().toString(),port);
         startMulticastListener();
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
@@ -67,20 +74,34 @@ public class Broker {
     }
 
     private void sendPingRequest() throws IOException {
-        String message = "PING_BROKERS" + System.lineSeparator() + port;
-        byte[] messageBytes = message.getBytes();
+        InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
+        interBrokerMessage.setMessageType("PING");
+        interBrokerMessage.setPort(port);
+        byte[] messageBytes = interBrokerMessage.serializeToBytes();
+        DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
+        brokerMulticastSocket.send(datagramPacket);
+        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
+    }
+
+    public void updateQueueAddressMap(String queueName) throws IOException {
+        InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
+        interBrokerMessage.setQueueName(queueName);
+        interBrokerMessage.setLeader(brokerAddress);
+        interBrokerMessage.setMessageType("NEW_QUEUE");
+        byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
-        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
-
+        System.out.println("[INFO]: [Broker: " + port +  "] Updated queue address map added " + queueName + " leader: " + brokerAddress);
     }
 
     private void sendPingResponse() throws IOException {
-        String response = String.valueOf(port);
-        byte[] responseBytes = response.getBytes();
-        DatagramPacket responsePacket = new DatagramPacket(responseBytes, responseBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
-        brokerMulticastSocket.send(responsePacket);
-        System.out.println("[INFO]: [Broker: " + port + "] Responded to ping request with " + response);
+        InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
+        interBrokerMessage.setMessageType("ACK");
+        interBrokerMessage.setPort(port);
+        byte[] messageBytes = interBrokerMessage.serializeToBytes();
+        DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
+        brokerMulticastSocket.send(datagramPacket);
+        System.out.println("[INFO]: [Broker: " + port + "] Responded to ping request with " + interBrokerMessage.getPort());
     }
 
     private void startMulticastListener() {
@@ -94,7 +115,7 @@ public class Broker {
 
 
                 while (true) {
-                    byte[] buffer = new byte[256];
+                    byte[] buffer = new byte[1024];
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     multicastSocket.receive(packet);
                     String message = new String(packet.getData(), 0, packet.getLength());
@@ -105,7 +126,7 @@ public class Broker {
                                 responseBytes, responseBytes.length, packet.getAddress(), packet.getPort()
                         );
                         multicastSocket.send(responsePacket);
-                        System.out.println("[INFO]: [Broker: \" + port +  \"] Responded to discovery request with " + response);
+                        System.out.println("[INFO]: [Broker: " + port +  "] Responded to discovery request with " + response);
                     }
 
                 }
@@ -134,15 +155,17 @@ public class Broker {
             try {
                 System.out.println("[INFO]: [Broker: " + port +  "] Listening other brokers on " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
                 while (true) {
-                    byte[] buffer = new byte[256];
+                    byte[] buffer = new byte[1024];
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     brokerMulticastSocket.receive(packet);
-                    String message = new String(packet.getData(), 0, packet.getLength());
-                    String[] messageArray = message.split("\n");
-
-                    if (messageArray[0].equals("PING_BROKERS") && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (Integer.parseInt(messageArray[1]) == (port)))) {
+                    InterBrokerMessage receivedInterBrokerMessage = InterBrokerMessage.deserializeFromBytes(packet.getData());
+                    if (receivedInterBrokerMessage.getMessageType().equals("PING") && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
                         sendPingResponse();
-                        registerBroker(packet.getAddress().getHostAddress(),messageArray[1]);
+                        registerBroker(packet.getAddress().getHostAddress(),receivedInterBrokerMessage.getPort().toString());
+                    }
+                    else if (receivedInterBrokerMessage.getMessageType().equals("NEW_QUEUE")) {
+                        queueAddressMap.put(receivedInterBrokerMessage.getQueueName(), receivedInterBrokerMessage.getLeader());
+                        sendPingResponse();
                     }
                 }
             } catch (IOException e) {
