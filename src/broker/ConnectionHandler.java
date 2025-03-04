@@ -43,7 +43,6 @@ public class ConnectionHandler implements Runnable {
                 if (request == null) break;
                 if (request instanceof InterBrokerMessage){
                     InterBrokerMessage requestToBroker = (InterBrokerMessage) request;
-                    requestToBroker.setClientAddress(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()));
                     InterBrokerMessage responseToBroker = processBrokerRequest(requestToBroker);
                     out.writeObject(responseToBroker);
                     out.flush();

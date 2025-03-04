@@ -30,7 +30,7 @@ public class Client {
         }
     }
 
-    public void start() {
+    public void start() throws SocketException {
         while (true) {
             String[] parts = getCommand();
             if (parts.length == 0) {continue;}
@@ -48,6 +48,7 @@ public class Client {
                             System.out.println("Usage: create <queue_name>");
                             continue;
                         }
+                        request.setClientAddress(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()));
                         request.setType(Operation.CREATE);
                         request.setQueueName(parts[1]);
                         break;
@@ -60,6 +61,7 @@ public class Client {
                             System.out.println("Usage: read <queue_name>");
                             continue;
                         }
+                        request.setClientAddress(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()));
                         request.setType(Operation.READ);
                         request.setQueueName(parts[1]);
                         break;

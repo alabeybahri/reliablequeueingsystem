@@ -6,6 +6,7 @@ import java.io.Serializable;
 public class Message implements Serializable {
     private String type; // "create", "read", "write"
     private String queueName;
+    private Address clientAddress;
     private Integer value; // for write operations
     private ResponseType responseType; // "success", "error"
     private String responseMessage;
@@ -32,4 +33,12 @@ public class Message implements Serializable {
     public void setResponseMessage(String responseMessage) { this.responseMessage = responseMessage; }
     public Integer getResponseData() { return responseData; }
     public void setResponseData(Integer responseData) { this.responseData = responseData; }
+
+    public Address getClientAddress() {
+        return clientAddress;
+    }
+
+    public void setClientAddress(Address clientAddress) {
+        this.clientAddress = clientAddress;
+    }
 }

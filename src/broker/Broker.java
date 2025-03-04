@@ -54,6 +54,7 @@ public class Broker {
                 String clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
                 if (knownBrokers.contains(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()))) {
                     System.out.println("[INFO]: [Broker: " + port +  "] Broker connected: " + clientId);
+
                 }else {
                     System.out.println("[INFO]: [Broker: " + port +  "] Client connected: " + clientId);
                 }
@@ -361,7 +362,6 @@ public class Broker {
              ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
             InterBrokerMessage readRequest = new InterBrokerMessage();
             readRequest.setMessageType(MessageType.READ_MESSAGE);
-            readRequest.setClientAddress();
             readRequest.setQueueName(request.getQueueName());
             out.writeObject(readRequest);
             socket.setSoTimeout(5000);
