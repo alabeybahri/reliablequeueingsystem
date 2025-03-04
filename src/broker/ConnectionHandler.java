@@ -1,5 +1,6 @@
 package broker;
 
+import common.Address;
 import common.InterBrokerMessage;
 import common.Message;
 import common.Operation;
@@ -41,7 +42,9 @@ public class ConnectionHandler implements Runnable {
                 Object request = in.readObject();
                 if (request == null) break;
                 if (request instanceof InterBrokerMessage){
-                    InterBrokerMessage responseToBroker = processBrokerRequest((InterBrokerMessage) request);
+                    InterBrokerMessage requestToBroker = (InterBrokerMessage) request;
+                    requestToBroker.setClientAddress(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()));
+                    InterBrokerMessage responseToBroker = processBrokerRequest(requestToBroker);
                     out.writeObject(responseToBroker);
                     out.flush();
 
@@ -216,9 +219,9 @@ public class ConnectionHandler implements Runnable {
             System.out.println("Do not have this replication, cannot append message. Queue : " + request.getQueueName());
             return ;
         }
-        response.setMessageType(MessageType.ACK);
-        int newOffset = broker.replicationClientOffsets.get(request.getQueueName()).get(clientId) + 1;
+        int newOffset = broker.replicationClientOffsets.get(request.getQueueName()).get(request.getClientAddress()) + 1;
         broker.replicationClientOffsets.get(request.getQueueName()).put(clientId, newOffset);
+        response.setMessageType(MessageType.ACK);
         System.out.println("Replicated queue " + request.getQueueName() + ": data " + request.getData() + " added to replication");
     }
 }

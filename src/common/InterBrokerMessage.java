@@ -8,6 +8,7 @@ import java.util.UUID;
 public class InterBrokerMessage implements Serializable {
     private MessageType messageType;
     private Integer port;
+    private Address clientAddress;
     private String queueName;
     private Address leader;
     private int term;
@@ -81,6 +82,14 @@ public class InterBrokerMessage implements Serializable {
 
     public void setVote(boolean vote) {
         this.vote = vote;
+    }
+
+    public Address getClientAddress() {
+        return clientAddress;
+    }
+
+    public void setClientAddress(Address clientAddress) {
+        this.clientAddress = clientAddress;
     }
 }
 

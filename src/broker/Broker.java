@@ -361,6 +361,7 @@ public class Broker {
              ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
             InterBrokerMessage readRequest = new InterBrokerMessage();
             readRequest.setMessageType(MessageType.READ_MESSAGE);
+            readRequest.setClientAddress();
             readRequest.setQueueName(request.getQueueName());
             out.writeObject(readRequest);
             socket.setSoTimeout(5000);
