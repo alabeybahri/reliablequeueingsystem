@@ -13,6 +13,7 @@ public class InterBrokerMessage implements Serializable {
     private int term;
     private boolean vote;
     private int data;
+    private String originalClientId;
 
     public Address getLeader() {
         return leader;
@@ -81,6 +82,14 @@ public class InterBrokerMessage implements Serializable {
 
     public void setVote(boolean vote) {
         this.vote = vote;
+    }
+
+    public String getOriginalClientId() {
+        return originalClientId;
+    }
+
+    public void setOriginalClientId(String originalClientId) {
+        this.originalClientId = originalClientId;
     }
 }
 

@@ -32,6 +32,11 @@ public class Broker {
     private int FAILURE_TIMEOUT;
     private int SEND_PING_INTERVAL;
     private Random random;
+    // Persistent socket pool for broker-broker connections
+    private Map<Address, Socket> brokerSocketPool = new ConcurrentHashMap<>();
+    private Map<Address, ObjectOutputStream> brokerOutputStreams = new ConcurrentHashMap<>();
+    private Map<Address, ObjectInputStream> brokerInputStreams = new ConcurrentHashMap<>();
+    private final Object brokerSocketLock = new Object();
 
 
     public Broker(int port) throws IOException {
@@ -44,6 +49,7 @@ public class Broker {
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
         startPeriodicPing();
+        initializeConnectionCleanup();
     }
 
     public void start() {
@@ -254,14 +260,16 @@ public class Broker {
 
 
     private boolean sendReplicationRequest(String queueName, Address broker) {
-        try (Socket socket = new Socket(broker.getHost(), broker.getPort());
-             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
 
             InterBrokerMessage request = new InterBrokerMessage();
             request.setMessageType(MessageType.REPLICATION);
             request.setQueueName(queueName);
             out.writeObject(request);
+            out.flush();
 
             socket.setSoTimeout(5000); // 5 seconds for ACK
 
@@ -271,6 +279,19 @@ public class Broker {
 
         } catch (IOException | ClassNotFoundException e) {
             System.err.println("[INFO]: [Broker: " + port + "] Replication creation failed for " + broker + ": " + e.getMessage());
+
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
             return false;
         }
     }
@@ -282,7 +303,7 @@ public class Broker {
 
 
 
-    public void updateReplications(Message request) {
+    public void updateReplications(Message request, String originalClientId) {
         String requestType = request.getType();
         String queueName = request.getQueueName();
         List<Address> brokersToSend = replicationBrokers.get(queueName);
@@ -295,20 +316,15 @@ public class Broker {
         for (Address brokerToSend : brokersToSend) {
             executor.submit(() -> {
                 try {
+                    boolean ackReceived = false;
                     if (requestType.equals(Operation.WRITE)){
-                        boolean ackReceived = sendAppendMessageRequest(request, brokerToSend);
-                        if (ackReceived) {
-                            successCount.incrementAndGet();
-                        } else {
-                            // this is the case that replication may have failed.
-                        }
+                        ackReceived = sendAppendMessageRequestWithClientId(request, brokerToSend, originalClientId);
                     } else if (requestType.equals(Operation.READ)){
-                        boolean ackReceived = sendReadMessageRequest(request, brokerToSend);
-                        if (ackReceived) {
-                            successCount.incrementAndGet();
-                        }{
-                            // this is the case that the replication of read operation is failed
-                        }
+                        ackReceived = sendReadMessageRequestWithClientId(request, brokerToSend, originalClientId);
+                    }
+
+                    if (ackReceived) {
+                        successCount.incrementAndGet();
                     }
                 } catch (Exception e) {
                     System.err.println("[ERROR]: Append/Read replication failed for " + brokerToSend + ": " + e.getMessage());
@@ -329,53 +345,200 @@ public class Broker {
         executor.shutdown();
     }
 
-    private boolean sendAppendMessageRequest(Message request, Address broker) {
-        try (Socket socket = new Socket(broker.getHost(), broker.getPort());
-             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+    private boolean sendAppendMessageRequestWithClientId(Message request, Address broker, String originalClientId) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
+
             InterBrokerMessage replicationRequest = new InterBrokerMessage();
             replicationRequest.setMessageType(MessageType.APPEND_MESSAGE);
             replicationRequest.setData(request.getValue());
             replicationRequest.setQueueName(request.getQueueName());
+            replicationRequest.setOriginalClientId(originalClientId);
             out.writeObject(replicationRequest);
+            out.flush();
+
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
             System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request: " + response);
             return response.getMessageType() == MessageType.ACK;
 
-        } catch (IOException e) {
+        } catch (IOException | ClassNotFoundException e) {
             System.err.println("[ERROR]: Append message to replication failed for " + broker + ": " + e.getMessage());
-            return false;
 
-        } catch (ClassNotFoundException e) {
-            System.err.println("[ERROR]: Append message to replication failed for " + broker + ", since response could not be mapped : " + e.getMessage());
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
             return false;
         }
-
     }
 
-    private boolean sendReadMessageRequest(Message request, Address broker) {
-        try (Socket socket = new Socket(broker.getHost(), broker.getPort());
-             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
-             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+    private boolean sendReadMessageRequestWithClientId(Message request, Address broker, String originalClientId) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
+
             InterBrokerMessage readRequest = new InterBrokerMessage();
             readRequest.setMessageType(MessageType.READ_MESSAGE);
             readRequest.setQueueName(request.getQueueName());
+            readRequest.setOriginalClientId(originalClientId);
             out.writeObject(readRequest);
+            out.flush();
+
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
             System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request: " + response);
             return response.getMessageType() == MessageType.ACK;
 
-        } catch (IOException e) {
+        } catch (IOException | ClassNotFoundException e) {
             System.err.println("[ERROR]: Read message to replication failed for " + broker + ": " + e.getMessage());
-            return false;
 
-        } catch (ClassNotFoundException e) {
-            System.err.println("[ERROR]: Read message to replication failed for " + broker + ", since response could not be mapped : " + e.getMessage());
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
             return false;
+        }
+    }
+
+    private boolean sendAppendMessageRequest(Message request, Address broker) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
+
+            InterBrokerMessage replicationRequest = new InterBrokerMessage();
+            replicationRequest.setMessageType(MessageType.APPEND_MESSAGE);
+            replicationRequest.setData(request.getValue());
+            replicationRequest.setQueueName(request.getQueueName());
+            out.writeObject(replicationRequest);
+            out.flush();
+
+            socket.setSoTimeout(5000);
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request: " + response);
+            return response.getMessageType() == MessageType.ACK;
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("[ERROR]: Append message to replication failed for " + broker + ": " + e.getMessage());
+
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
+            return false;
+        }
+    }
+
+    private boolean sendReadMessageRequest(Message request, Address broker) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
+
+            InterBrokerMessage readRequest = new InterBrokerMessage();
+            readRequest.setMessageType(MessageType.READ_MESSAGE);
+            readRequest.setQueueName(request.getQueueName());
+            out.writeObject(readRequest);
+            out.flush();
+
+            socket.setSoTimeout(5000);
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request: " + response);
+            return response.getMessageType() == MessageType.ACK;
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("[ERROR]: Read message to replication failed for " + broker + ": " + e.getMessage());
+
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
+            return false;
+        }
+    }
+
+    private synchronized Socket getOrCreateBrokerSocket(Address brokerAddress) throws IOException {
+        // Check if socket already exists and is valid
+        Socket existingSocket = brokerSocketPool.get(brokerAddress);
+        if (existingSocket != null && !existingSocket.isClosed() && existingSocket.isConnected()) {
+            return existingSocket;
+        }
+
+        // Create new socket
+        Socket newSocket = new Socket(brokerAddress.getHost(), brokerAddress.getPort());
+        ObjectOutputStream out = new ObjectOutputStream(newSocket.getOutputStream());
+        ObjectInputStream in = new ObjectInputStream(newSocket.getInputStream());
+
+        // Store socket and streams
+        brokerSocketPool.put(brokerAddress, newSocket);
+        brokerOutputStreams.put(brokerAddress, out);
+        brokerInputStreams.put(brokerAddress, in);
+
+        return newSocket;
+    }
+
+    private void initializeConnectionCleanup() {
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+        scheduler.scheduleAtFixedRate(this::cleanupBrokerConnections, 5, 5, TimeUnit.MINUTES);
+    }
+
+    private void cleanupBrokerConnections() {
+        synchronized (brokerSocketLock) {
+            Iterator<Map.Entry<Address, Socket>> iterator = brokerSocketPool.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<Address, Socket> entry = iterator.next();
+                Socket socket = entry.getValue();
+                if (socket.isClosed() || !socket.isConnected()) {
+                    try {
+                        socket.close();
+                    } catch (IOException e) {
+                        System.err.println("Error closing socket: " + e.getMessage());
+                    }
+                    iterator.remove();
+                    brokerOutputStreams.remove(entry.getKey());
+                    brokerInputStreams.remove(entry.getKey());
+                }
+            }
         }
     }
 }
