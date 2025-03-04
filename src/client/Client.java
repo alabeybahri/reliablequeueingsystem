@@ -44,14 +44,9 @@ public class Client {
                             System.out.println("Not connected to any broker. ");
                             continue;
                         }
-                        if (parts.length != 2 && parts.length != 3) {
-                            System.out.println("Usage: create <queue_name> or create <queue_name> <replication_factor>");
+                        if (parts.length != 2) {
+                            System.out.println("Usage: create <queue_name>");
                             continue;
-                        }
-                        int replicationFactor;
-                        if (parts.length == 3) {
-                            replicationFactor = Integer.parseInt(parts[2]);
-                            request.setValue(replicationFactor);
                         }
                         request.setType(Operation.CREATE);
                         request.setQueueName(parts[1]);

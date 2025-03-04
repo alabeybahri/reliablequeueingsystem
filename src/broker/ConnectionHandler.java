@@ -76,23 +76,11 @@ public class ConnectionHandler implements Runnable {
             response.setResponseType(ResponseType.ERROR);
             response.setResponseMessage("There is already a queue with this name");
         } else {
-            // replication
-            int replicationCount = 0;
-            if (request.getValue() != null && request.getValue() > 1){
-                replicationCount = broker.createReplication(request.getQueueName(), request.getValue() - 1);
-                if (replicationCount < 0){
-                    response.setResponseType(ResponseType.ERROR);
-                    response.setResponseMessage("Min replication count is 1, Max replication count is 4. Try again.");
-                    return;
-                }
-            }
             broker.queues.put(request.getQueueName(), new ArrayList<>());
             this.broker.queueAddressMap.put(request.getQueueName(), this.broker.brokerAddress);
+            broker.createReplication(request.getQueueName());
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Successfully added a queue with this name");
-            if (replicationCount > 0){
-                response.setResponseMessage(response.getResponseMessage() + ", replication count is " + replicationCount );
-            }
             broker.updateQueueAddressMap(request.getQueueName());
         }
     }
@@ -106,14 +94,13 @@ public class ConnectionHandler implements Runnable {
             }
             else {
                 // if there is replication, send message to replications
-                broker.appendMessageToReplications(request);
-                response.setResponseType(ResponseType.SUCCESS);
+                broker.updateReplications(request);
                 response.setResponseMessage("This broker is not the leader of this queue, leader is: " + leaderAddress);
             }
         }
         else {
             broker.queues.get(request.getQueueName()).add(request.getValue());
-            broker.appendMessageToReplications(request);
+            broker.updateReplications(request);
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Written successfully");
         }
@@ -138,6 +125,7 @@ public class ConnectionHandler implements Runnable {
             if (offset < queue.size()) {
                 Integer value = queue.get(offset);
                 offsets.put(request.getQueueName(), offset + 1);
+                broker.updateReplications(request);
                 response.setResponseType(ResponseType.SUCCESS);
                 response.setResponseData(value);
             } else {
@@ -150,7 +138,6 @@ public class ConnectionHandler implements Runnable {
     private Message processClientRequest(Message request) throws IOException {
         String type = request.getType();
         Message response = new Message();
-
         switch (type) {
             case Operation.CREATE:
                 synchronized (broker.queues) {
@@ -179,12 +166,16 @@ public class ConnectionHandler implements Runnable {
     private InterBrokerMessage processBrokerRequest(InterBrokerMessage request) throws IOException {
         MessageType messageType = request.getMessageType();
         InterBrokerMessage response = new InterBrokerMessage();
+
         switch (messageType) {
             case REPLICATION :
                 handleReplicationRequest(request, response);
                 break;
             case APPEND_MESSAGE:
                 handleAppendMessage(request, response);
+                break;
+            case READ_MESSAGE:
+                handleReadMessage(request, response);
                 break;
             case ACK:
                 break;
@@ -195,12 +186,17 @@ public class ConnectionHandler implements Runnable {
         return response;
     }
 
-    private void handleReplicationRequest(InterBrokerMessage request, InterBrokerMessage response) throws IOException {
+    private void handleReplicationRequest(InterBrokerMessage request, InterBrokerMessage response) {
         if (this.broker.queues.get(request.getQueueName())!= null){
             System.out.println("Leader of this queue, should not take this replication request : " + request.getQueueName());
             return ;
         }
         broker.replications.put(request.getQueueName(), new ArrayList<>());
+
+        Map<String, Integer> replicationOffset = new HashMap<>() {{
+            put(clientId, 0);
+        }};
+        broker.replicationClientOffsets.put(request.getQueueName(), replicationOffset);
         response.setMessageType(MessageType.ACK);
         System.out.println("Replicated queue " + request.getQueueName());
     }
@@ -212,6 +208,17 @@ public class ConnectionHandler implements Runnable {
         }
         broker.replications.get(request.getQueueName()).add(request.getData());
         response.setMessageType(MessageType.ACK);
+        System.out.println("Replicated queue " + request.getQueueName() + ": data " + request.getData() + " added to replication");
+    }
+
+    private void handleReadMessage(InterBrokerMessage request, InterBrokerMessage response){
+        if (this.broker.replications.get(request.getQueueName()) == null) {
+            System.out.println("Do not have this replication, cannot append message. Queue : " + request.getQueueName());
+            return ;
+        }
+        response.setMessageType(MessageType.ACK);
+        int newOffset = broker.replicationClientOffsets.get(request.getQueueName()).get(clientId) + 1;
+        broker.replicationClientOffsets.get(request.getQueueName()).put(clientId, newOffset);
         System.out.println("Replicated queue " + request.getQueueName() + ": data " + request.getData() + " added to replication");
     }
 }
