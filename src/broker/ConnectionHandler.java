@@ -201,6 +201,7 @@ public class ConnectionHandler implements Runnable {
         }
         broker.replications.put(request.getQueueName(), new ArrayList<>());
         response.setMessageType(MessageType.ACK);
+        System.out.println("Replicated queue " + request.getQueueName());
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -209,5 +210,6 @@ public class ConnectionHandler implements Runnable {
             return ;
         }
         broker.replications.get(request.getQueueName()).add(request.getData());
+        System.out.println("Replicated queue " + request.getQueueName() + ": data " + request.getData() + " added to replication");
     }
 }
