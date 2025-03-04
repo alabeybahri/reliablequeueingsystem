@@ -215,7 +215,7 @@ public class Broker {
      * @param queueName Queue that will be replicated.
      * @return Number of successfully created replicas excluding leader.
      */
-    public int createReplication(String queueName){
+    public int createReplication(String queueName, Address clientId){
         int replicationCount = (knownBrokers.size() + 1) / 2;
         if (replicationCount < 1) {
             System.out.println("[ERROR]: Not enough brokers to replicate queue: ");
@@ -232,7 +232,7 @@ public class Broker {
         for (Address broker : selectedBrokers) {
             executor.submit(() -> {
                 try {
-                    boolean ackReceived = sendReplicationRequest(queueName, broker);
+                    boolean ackReceived = sendReplicationRequest(queueName, broker, clientId);
                     if (ackReceived) {
                         successCount.incrementAndGet();
                         registerReplica(queueName, broker);
@@ -259,6 +259,7 @@ public class Broker {
     }
 
 
+
     private boolean sendReplicationRequest(String queueName, Address broker) {
         try {
             Socket socket = getOrCreateBrokerSocket(broker);
@@ -266,6 +267,7 @@ public class Broker {
             ObjectInputStream in = brokerInputStreams.get(broker);
 
             InterBrokerMessage request = new InterBrokerMessage();
+            request.setClientAddress(clientId);
             request.setMessageType(MessageType.REPLICATION);
             request.setQueueName(queueName);
             out.writeObject(request);

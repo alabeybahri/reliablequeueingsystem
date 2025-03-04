@@ -8,6 +8,7 @@ import java.util.UUID;
 public class InterBrokerMessage implements Serializable {
     private MessageType messageType;
     private Integer port;
+    private Address clientAddress;
     private String queueName;
     private Address leader;
     private int term;

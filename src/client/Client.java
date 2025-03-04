@@ -1,5 +1,6 @@
 package client;
 import common.Address;
+import common.LocalIP;
 import common.Message;
 import common.Operation;
 import common.enums.ResponseType;
@@ -30,7 +31,7 @@ public class Client {
         }
     }
 
-    public void start() {
+    public void start() throws SocketException {
         while (true) {
             String[] parts = getCommand();
             if (parts.length == 0) {continue;}
