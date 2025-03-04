@@ -40,7 +40,7 @@ public class Broker {
     public Broker(int port) throws IOException {
         this.port = port;
         this.brokerAddress = new Address(LocalIP.getLocalIP().toString(),port);
-        Random random = new Random(brokerAddress.hashCode());
+        this.random = new Random(brokerAddress.hashCode());
         FAILURE_TIMEOUT = random.nextInt(MAX_FAILURE_TIMEOUT - MIN_FAILURE_TIMEOUT) + MIN_FAILURE_TIMEOUT;
         SEND_PING_INTERVAL = (int) (FAILURE_TIMEOUT * 0.75 / NUM_ALLOWED_MISSED_PINGS);
         startMulticastListener();
@@ -79,7 +79,7 @@ public class Broker {
             } catch (InterruptedException | IOException e) {
                 e.printStackTrace();
             }
-        }, 0, SEND_PING_INTERVAL, TimeUnit.SECONDS);
+        }, 0, SEND_PING_INTERVAL, TimeUnit.MILLISECONDS);
     }
 
 
