@@ -43,6 +43,7 @@ public class ConnectionHandler implements Runnable {
                 if (request == null) break;
                 if (request instanceof InterBrokerMessage){
                     InterBrokerMessage requestToBroker = (InterBrokerMessage) request;
+
                     InterBrokerMessage responseToBroker = processBrokerRequest(requestToBroker);
                     out.writeObject(responseToBroker);
                     out.flush();
@@ -80,7 +81,9 @@ public class ConnectionHandler implements Runnable {
         } else {
             broker.queues.put(request.getQueueName(), new ArrayList<>());
             this.broker.queueAddressMap.put(request.getQueueName(), this.broker.brokerAddress);
-            broker.createReplication(request.getQueueName());
+            String host = clientId.split(":")[0];
+            int port = Integer.parseInt(clientId.split(":")[1]);
+            broker.createReplication(request.getQueueName(), new Address(host, port));
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Successfully added a queue with this name");
             broker.updateQueueAddressMap(request.getQueueName());

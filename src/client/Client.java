@@ -1,5 +1,6 @@
 package client;
 import common.Address;
+import common.LocalIP;
 import common.Message;
 import common.Operation;
 import common.enums.ResponseType;
@@ -48,7 +49,6 @@ public class Client {
                             System.out.println("Usage: create <queue_name>");
                             continue;
                         }
-                        request.setClientAddress(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()));
                         request.setType(Operation.CREATE);
                         request.setQueueName(parts[1]);
                         break;
@@ -61,7 +61,6 @@ public class Client {
                             System.out.println("Usage: read <queue_name>");
                             continue;
                         }
-                        request.setClientAddress(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()));
                         request.setType(Operation.READ);
                         request.setQueueName(parts[1]);
                         break;

@@ -54,7 +54,6 @@ public class Broker {
                 String clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
                 if (knownBrokers.contains(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()))) {
                     System.out.println("[INFO]: [Broker: " + port +  "] Broker connected: " + clientId);
-
                 }else {
                     System.out.println("[INFO]: [Broker: " + port +  "] Client connected: " + clientId);
                 }
@@ -210,7 +209,7 @@ public class Broker {
      * @param queueName Queue that will be replicated.
      * @return Number of successfully created replicas excluding leader.
      */
-    public int createReplication(String queueName){
+    public int createReplication(String queueName, Address clientId){
         int replicationCount = (knownBrokers.size() + 1) / 2;
         if (replicationCount < 1) {
             System.out.println("[ERROR]: Not enough brokers to replicate queue: ");
@@ -227,7 +226,7 @@ public class Broker {
         for (Address broker : selectedBrokers) {
             executor.submit(() -> {
                 try {
-                    boolean ackReceived = sendReplicationRequest(queueName, broker);
+                    boolean ackReceived = sendReplicationRequest(queueName, broker, clientId);
                     if (ackReceived) {
                         successCount.incrementAndGet();
                         registerReplica(queueName, broker);
@@ -254,12 +253,13 @@ public class Broker {
     }
 
 
-    private boolean sendReplicationRequest(String queueName, Address broker) {
+    private boolean sendReplicationRequest(String queueName, Address broker, Address clientId) {
         try (Socket socket = new Socket(broker.getHost(), broker.getPort());
              ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
              ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
 
             InterBrokerMessage request = new InterBrokerMessage();
+            request.setClientAddress(clientId);
             request.setMessageType(MessageType.REPLICATION);
             request.setQueueName(queueName);
             out.writeObject(request);
