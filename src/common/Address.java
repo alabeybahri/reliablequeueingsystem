@@ -1,23 +1,24 @@
 package common;
 
 import java.io.Serializable;
+import java.util.Objects;
 
 public class Address implements Serializable {
-    private String ip;
+    private String host;
     private int port;
 
-    public Address(String ip, int port) {
-        this.ip = ip;
+    public Address(String host, int port) {
+        this.host = host;
         this.port = port;
     }
 
 
-    public String getIp() {
-        return ip;
+    public String getHost() {
+        return host;
     }
 
-    public void setIp(String ip) {
-        this.ip = ip;
+    public void setHost(String host) {
+        this.host = host;
     }
 
     public int getPort() {
@@ -29,6 +30,13 @@ public class Address implements Serializable {
     }
 
     public String toString() {
-        return ip + ":" + port;
+        return host + ":" + port;
     }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(host, port);
+    }
+
+
 }

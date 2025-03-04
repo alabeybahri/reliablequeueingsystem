@@ -2,6 +2,7 @@ package client;
 import common.Address;
 import common.Message;
 import common.Operation;
+import common.enums.ResponseType;
 
 import java.io.*;
 import java.net.*;
@@ -43,9 +44,14 @@ public class Client {
                             System.out.println("Not connected to any broker. ");
                             continue;
                         }
-                        if (parts.length != 2) {
-                            System.out.println("Usage: create <queue_name>");
+                        if (parts.length != 2 && parts.length != 3) {
+                            System.out.println("Usage: create <queue_name> or create <queue_name> <replication_factor>");
                             continue;
+                        }
+                        int replicationFactor;
+                        if (parts.length == 3) {
+                            replicationFactor = Integer.parseInt(parts[2]);
+                            request.setValue(replicationFactor);
                         }
                         request.setType(Operation.CREATE);
                         request.setQueueName(parts[1]);
@@ -106,7 +112,7 @@ public class Client {
                 out.writeObject(request);
                 out.flush();
                 Message response = (Message) in.readObject();
-                if ("success".equals(response.getResponseType())) {
+                if (response.getResponseType().equals(ResponseType.SUCCESS)) {
                     if (response.getResponseData() != null) {
                         System.out.println("Received: " + response.getResponseData());
                     } else {
@@ -137,7 +143,7 @@ public class Client {
     private void connectToBroker(int index){
         try {
             if (socket != null && !socket.isClosed()) {socket.close();}
-            String host = brokerCache.get(index - 1).getIp();
+            String host = brokerCache.get(index - 1).getHost();
             int port = brokerCache.get(index - 1).getPort();
             socket = new Socket(host, port);
             out = new ObjectOutputStream(socket.getOutputStream());

@@ -1,11 +1,13 @@
 package common;
+import common.enums.ResponseType;
+
 import java.io.Serializable;
 
 public class Message implements Serializable {
     private String type; // "create", "read", "write"
     private String queueName;
     private Integer value; // for write operations
-    private String responseType; // "success", "error"
+    private ResponseType responseType; // "success", "error"
     private String responseMessage;
     private Integer responseData; // for read operations
 
@@ -24,8 +26,8 @@ public class Message implements Serializable {
     public void setQueueName(String queueName) { this.queueName = queueName; }
     public Integer getValue() { return value; }
     public void setValue(Integer value) { this.value = value; }
-    public String getResponseType() { return responseType; }
-    public void setResponseType(String responseType) { this.responseType = responseType; }
+    public ResponseType getResponseType() { return responseType; }
+    public void setResponseType(ResponseType responseType) { this.responseType = responseType; }
     public String getResponseMessage() { return responseMessage; }
     public void setResponseMessage(String responseMessage) { this.responseMessage = responseMessage; }
     public Integer getResponseData() { return responseData; }

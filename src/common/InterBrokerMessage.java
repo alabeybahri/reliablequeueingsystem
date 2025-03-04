@@ -1,13 +1,18 @@
 package common;
 
+import common.enums.MessageType;
+
 import java.io.*;
+import java.util.UUID;
 
 public class InterBrokerMessage implements Serializable {
-    private String messageType;
+    private MessageType messageType;
     private Integer port;
     private String queueName;
     private Address leader;
-
+    private int term;
+    private boolean vote;
+    private int data;
 
     public Address getLeader() {
         return leader;
@@ -42,11 +47,11 @@ public class InterBrokerMessage implements Serializable {
         }
     }
 
-    public String getMessageType() {
+    public MessageType getMessageType() {
         return messageType;
     }
 
-    public void setMessageType(String messageType) {
+    public void setMessageType(MessageType messageType) {
         this.messageType = messageType;
     }
 
@@ -57,4 +62,29 @@ public class InterBrokerMessage implements Serializable {
     public void setPort(Integer port) {
         this.port = port;
     }
+
+    public int getTerm() { return term; }
+
+    public void setTerm(int term) { this.term = term; }
+
+    public int getData() {
+        return data;
+    }
+
+    public void setData(int data) {
+        this.data = data;
+    }
+
+    public boolean isVote() {
+        return vote;
+    }
+
+    public void setVote(boolean vote) {
+        this.vote = vote;
+    }
 }
+
+
+
+
+

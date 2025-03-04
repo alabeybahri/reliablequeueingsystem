@@ -3,36 +3,46 @@ package broker;
 import java.io.*;
 import java.net.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import common.InterBrokerMessage;
 import common.Address;
 import common.LocalIP;
+import common.enums.MessageType;
 
 public class Broker {
     private int port;
     public Address brokerAddress;
-    Map<String, List<Integer>> queues = new ConcurrentHashMap<>();
+    public Map<String, List<Integer>> queues = new ConcurrentHashMap<>();
     public Map<String, Map<String, Integer>> clientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
     private MulticastSocket brokerMulticastSocket;
     private InetSocketAddress brokerGroup;
-    private List<String> knownBrokers;
+    private List<Address> knownBrokers = new ArrayList<>();
     public Map<String, Address> queueAddressMap = new ConcurrentHashMap<>();
     public Map<String, Map<String, Integer>> clientOffsetAddressMap = new ConcurrentHashMap<>();
-
+    public Map<String, List<Address>> replicationBrokers = new ConcurrentHashMap<>(); // replication broker addresses of this leader
+    public Map<String, List<Integer>> replications = new ConcurrentHashMap<>(); // replicated queues, leader is another broker
     private static final String CLIENT_MULTICAST_ADDRESS = "239.255.0.2";
     private static final int CLIENT_MULTICAST_PORT = 5010;
     private static final String BROKER_MULTICAST_ADDRESS = "239.255.0.1";
+    private static final int MAX_REPLICATION_COUNT = 4;
     private static final int BROKER_MULTICAST_PORT = 5020;
-    private static final int DISCOVERY_TIMEOUT = 1000; // 1 second timeout
+    private static final int MIN_FAILURE_TIMEOUT = 100;
+    private static final int MAX_FAILURE_TIMEOUT = 200;
+    private static final int NUM_ALLOWED_MISSED_PINGS = 3;
+    private static final int PING_JITTER = 1000;
+    private int FAILURE_TIMEOUT;
+    private int SEND_PING_INTERVAL;
+    private Random random;
+
 
     public Broker(int port) throws IOException {
         this.port = port;
-        this.knownBrokers = new ArrayList<>();
         this.brokerAddress = new Address(LocalIP.getLocalIP().toString(),port);
+        Random random = new Random(brokerAddress.hashCode());
+        FAILURE_TIMEOUT = random.nextInt(MAX_FAILURE_TIMEOUT - MIN_FAILURE_TIMEOUT) + MIN_FAILURE_TIMEOUT;
+        SEND_PING_INTERVAL = (int) (FAILURE_TIMEOUT * 0.75 / NUM_ALLOWED_MISSED_PINGS);
         startMulticastListener();
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
@@ -46,7 +56,7 @@ public class Broker {
                 Socket socket = serverSocket.accept();
                 String clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
                 System.out.println("Client connected: " + clientId);
-                new Thread(new ClientHandler(socket, clientId, this)).start();
+                new Thread(new ConnectionHandler(socket, clientId, this)).start();
 
             }
         } catch (IOException e) {
@@ -61,21 +71,25 @@ public class Broker {
 
     private void startPeriodicPing() {
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-        Random random = new Random();
 
         scheduler.scheduleAtFixedRate(() -> {
             try {
-                Thread.sleep(random.nextInt(2000)); // Random delay between 0-10s
+                Thread.sleep(random.nextInt(PING_JITTER));
                 sendPingRequest();
             } catch (InterruptedException | IOException e) {
                 e.printStackTrace();
             }
-        }, 0, 2, TimeUnit.SECONDS);
+        }, 0, SEND_PING_INTERVAL, TimeUnit.SECONDS);
     }
 
+
+    /**
+     * Sends ping messages to its own replication nodes as a heartbeat.
+     * @throws IOException
+     */
     private void sendPingRequest() throws IOException {
         InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
-        interBrokerMessage.setMessageType("PING");
+        interBrokerMessage.setMessageType(MessageType.PING);
         interBrokerMessage.setPort(port);
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
@@ -83,11 +97,15 @@ public class Broker {
         System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
     }
 
+    /**
+     * Sends datagram packet to multicast group to notify newly created queue.
+     * @param queueName newly created queue name.
+     */
     public void updateQueueAddressMap(String queueName) throws IOException {
         InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
         interBrokerMessage.setQueueName(queueName);
         interBrokerMessage.setLeader(brokerAddress);
-        interBrokerMessage.setMessageType("NEW_QUEUE");
+        interBrokerMessage.setMessageType(MessageType.NEW_QUEUE);
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
@@ -96,7 +114,7 @@ public class Broker {
 
     private void sendPingResponse() throws IOException {
         InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
-        interBrokerMessage.setMessageType("ACK");
+        interBrokerMessage.setMessageType(MessageType.ACK);
         interBrokerMessage.setPort(port);
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
@@ -159,11 +177,11 @@ public class Broker {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     brokerMulticastSocket.receive(packet);
                     InterBrokerMessage receivedInterBrokerMessage = InterBrokerMessage.deserializeFromBytes(packet.getData());
-                    if (receivedInterBrokerMessage.getMessageType().equals("PING") && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
+                    if (receivedInterBrokerMessage.getMessageType().equals(MessageType.PING) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
                         sendPingResponse();
-                        registerBroker(packet.getAddress().getHostAddress(),receivedInterBrokerMessage.getPort().toString());
+                        registerBroker(new Address(packet.getAddress().getHostAddress(), receivedInterBrokerMessage.getPort()));
                     }
-                    else if (receivedInterBrokerMessage.getMessageType().equals("NEW_QUEUE")) {
+                    else if (receivedInterBrokerMessage.getMessageType().equals(MessageType.NEW_QUEUE)) {
                         queueAddressMap.put(receivedInterBrokerMessage.getQueueName(), receivedInterBrokerMessage.getLeader());
                         sendPingResponse();
                     }
@@ -174,13 +192,162 @@ public class Broker {
         }).start();
     }
 
-    private void registerBroker(String host, String port) {
-        String brokerInfo = host + ":" + port;
+    private void registerBroker(Address address) {
+        String brokerInfo = address.getHost() + ":" + address.getPort();
+
         System.out.println("[INFO]: [Broker: " + this.port +  "] Received response from " + brokerInfo);
-        if (!knownBrokers.contains(brokerInfo)) {
-            knownBrokers.add(brokerInfo);
+        if (!knownBrokers.contains(address)) {
+            knownBrokers.add(address);
             System.out.println("[INFO]: [Broker: " + this.port +  "] Registered broker " + brokerInfo);
         }
+    }
+
+    /**
+     * Selects brokers to replicate its queue. Sends them unicast request to create the queue replication.
+     * At this point, it is known that queue is not created before.
+     * @param queueName Queue that will be replicated.
+     * @param replicationCount Replication count, can be minimum 1, maximum 4.
+     * @return Number of successfully created replicas excluding leader.
+     */
+    public int createReplication(String queueName, int replicationCount){
+        if (replicationCount < 1 || replicationCount > MAX_REPLICATION_COUNT) {
+            System.out.println("Invalid replication count. Allowed range: ["
+                    + 1 + "-" + MAX_REPLICATION_COUNT + "]");
+            return -1;
+        }
+
+        if (knownBrokers.size() < replicationCount) {
+            System.out.println("Insufficient brokers. Required: " + replicationCount
+                    + ", Available: " + knownBrokers.size());
+            return -2;
+        }
+
+        List<Address> shuffledBrokers = new ArrayList<>(knownBrokers);
+        Collections.shuffle(shuffledBrokers);
+        List<Address> selectedBrokers = shuffledBrokers.subList(0, replicationCount);
+
+
+        ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
+        AtomicInteger successCount = new AtomicInteger(0);
+        CountDownLatch latch = new CountDownLatch(replicationCount);
+        // Send async replication requests
+        for (Address broker : selectedBrokers) {
+            executor.submit(() -> {
+                try {
+                    boolean ackReceived = sendReplicationRequest(queueName, broker);
+                    if (ackReceived) {
+                        successCount.incrementAndGet();
+                        registerReplica(queueName, broker);
+                    }
+                } catch (Exception e) {
+                    System.err.println("Replication failed for " + broker + ": " + e.getMessage());
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        try {
+            boolean allDone = latch.await(10, TimeUnit.SECONDS); // Overall timeout
+            if (!allDone) {
+                System.out.println("Timeout waiting for replications");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        executor.shutdown();
+        return successCount.get();
+    }
+
+
+    private boolean sendReplicationRequest(String queueName, Address broker) {
+        try (Socket socket = new Socket(broker.getHost(), broker.getPort());
+             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+
+            InterBrokerMessage request = new InterBrokerMessage();
+            request.setMessageType(MessageType.REPLICATION);
+            request.setQueueName(queueName);
+            out.writeObject(request);
+
+            socket.setSoTimeout(5000); // 5 seconds for ACK
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            System.out.println("ACK received for replication request: " + response);
+            return response.getMessageType() == MessageType.ACK;
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("Replication creation failed for " + broker + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private void registerReplica(String queueName, Address broker) {
+        replicationBrokers.computeIfAbsent(queueName, k -> new ArrayList<>())
+                .add(broker);
+    }
+
+
+    public void appendMessageToReplications(String queueName) {
+        List<Address> brokersToSend = replicationBrokers.get(queueName);
+        if (brokersToSend == null) { return; } // there is no replication for this queue
+
+        int replicationCount = brokersToSend.size();
+        ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
+        AtomicInteger successCount = new AtomicInteger(0);
+        CountDownLatch latch = new CountDownLatch(replicationCount);
+        for (Address brokerToSend : brokersToSend) {
+            executor.submit(() -> {
+                try {
+                    boolean ackReceived = sendAppendMessageRequest(queueName, brokerToSend);
+                    if (ackReceived) {
+                        successCount.incrementAndGet();
+                    } else {
+                        // this is the case that replication may have failed.
+                    }
+                } catch (Exception e) {
+                    System.err.println("Append message to replication failed for " + brokerToSend + ": " + e.getMessage());
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        try {
+            boolean allDone = latch.await(10, TimeUnit.SECONDS); // Overall timeout
+            if (!allDone) {
+                System.out.println("Timeout waiting for replications");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        executor.shutdown();
+    }
+
+    private boolean sendAppendMessageRequest(String queueName, Address broker) {
+        try (Socket socket = new Socket(broker.getHost(), broker.getPort());
+             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
+            InterBrokerMessage request = new InterBrokerMessage();
+            request.setMessageType(MessageType.APPEND_MESSAGE);
+            request.setQueueName(queueName);
+            out.writeObject(request);
+            socket.setSoTimeout(5000);
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            System.out.println("ACK received for append message request: " + response);
+            return response.getMessageType() == MessageType.ACK;
+
+        } catch (IOException e) {
+            System.err.println("Append message to replication failed for " + broker + ": " + e.getMessage());
+            return false;
+
+        } catch (ClassNotFoundException e) {
+            System.err.println("Append message to replication failed for " + broker + ", since response could not be mapped : " + e.getMessage());
+            return false;
+        }
+
     }
 }
 
