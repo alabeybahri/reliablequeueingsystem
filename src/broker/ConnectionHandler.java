@@ -106,13 +106,14 @@ public class ConnectionHandler implements Runnable {
             }
             else {
                 // if there is replication, send message to replications
-                broker.appendMessageToReplications(request.getQueueName());
+                broker.appendMessageToReplications(request);
                 response.setResponseType(ResponseType.SUCCESS);
                 response.setResponseMessage("This broker is not the leader of this queue, leader is: " + leaderAddress);
             }
         }
         else {
             broker.queues.get(request.getQueueName()).add(request.getValue());
+            broker.appendMessageToReplications(request);
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Written successfully");
         }
@@ -210,6 +211,7 @@ public class ConnectionHandler implements Runnable {
             return ;
         }
         broker.replications.get(request.getQueueName()).add(request.getData());
+        response.setMessageType(MessageType.ACK);
         System.out.println("Replicated queue " + request.getQueueName() + ": data " + request.getData() + " added to replication");
     }
 }

@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import common.InterBrokerMessage;
 import common.Address;
 import common.LocalIP;
+import common.Message;
 import common.enums.MessageType;
 
 public class Broker {
@@ -94,7 +95,7 @@ public class Broker {
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
         brokerMulticastSocket.send(datagramPacket);
-        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
+//        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
     }
 
     /**
@@ -119,7 +120,7 @@ public class Broker {
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
         brokerMulticastSocket.send(datagramPacket);
-        System.out.println("[INFO]: [Broker: " + port + "] Responded to ping request with " + interBrokerMessage.getPort());
+//        System.out.println("[INFO]: [Broker: " + port + "] Responded to ping request with " + interBrokerMessage.getPort());
     }
 
     private void startMulticastListener() {
@@ -195,7 +196,7 @@ public class Broker {
     private void registerBroker(Address address) {
         String brokerInfo = address.getHost() + ":" + address.getPort();
 
-        System.out.println("[INFO]: [Broker: " + this.port +  "] Received response from " + brokerInfo);
+//        System.out.println("[INFO]: [Broker: " + this.port +  "] Received response from " + brokerInfo);
         if (!knownBrokers.contains(address)) {
             knownBrokers.add(address);
             System.out.println("[INFO]: [Broker: " + this.port +  "] Registered broker " + brokerInfo);
@@ -289,7 +290,8 @@ public class Broker {
     }
 
 
-    public void appendMessageToReplications(String queueName) {
+    public void appendMessageToReplications(Message request) {
+        String queueName = request.getQueueName();
         List<Address> brokersToSend = replicationBrokers.get(queueName);
         if (brokersToSend == null) { return; } // there is no replication for this queue
 
@@ -300,7 +302,7 @@ public class Broker {
         for (Address brokerToSend : brokersToSend) {
             executor.submit(() -> {
                 try {
-                    boolean ackReceived = sendAppendMessageRequest(queueName, brokerToSend);
+                    boolean ackReceived = sendAppendMessageRequest(request, brokerToSend);
                     if (ackReceived) {
                         successCount.incrementAndGet();
                     } else {
@@ -325,14 +327,15 @@ public class Broker {
         executor.shutdown();
     }
 
-    private boolean sendAppendMessageRequest(String queueName, Address broker) {
+    private boolean sendAppendMessageRequest(Message request, Address broker) {
         try (Socket socket = new Socket(broker.getHost(), broker.getPort());
              ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
              ObjectInputStream in = new ObjectInputStream(socket.getInputStream())) {
-            InterBrokerMessage request = new InterBrokerMessage();
-            request.setMessageType(MessageType.APPEND_MESSAGE);
-            request.setQueueName(queueName);
-            out.writeObject(request);
+            InterBrokerMessage replicationRequest = new InterBrokerMessage();
+            replicationRequest.setMessageType(MessageType.APPEND_MESSAGE);
+            replicationRequest.setData(request.getValue());
+            replicationRequest.setQueueName(request.getQueueName());
+            out.writeObject(replicationRequest);
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
