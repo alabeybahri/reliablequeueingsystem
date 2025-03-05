@@ -18,7 +18,7 @@ public class Broker {
     private InetSocketAddress brokerGroup;
     public List<Address> knownBrokers = new ArrayList<>();
     public Map<String, Address> queueAddressMap = new ConcurrentHashMap<>();
-    public Map<String, List<Address>> replicationBrokers = new ConcurrentHashMap<>(); // replication broker addresses of this leader
+    public Map<String, List<Pair<Address, Integer>>> replicationBrokers = new ConcurrentHashMap<>(); // replication broker addresses of this leader
     public Map<String, Map<String, Integer>> replicationClientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
     public Map<String, List<Integer>> replications = new ConcurrentHashMap<>(); // replicated queues, leader is another broker
     private static final String CLIENT_MULTICAST_ADDRESS = "239.255.0.2";
@@ -29,6 +29,7 @@ public class Broker {
     private static final int MAX_FAILURE_TIMEOUT = 200;
     private static final int NUM_ALLOWED_MISSED_PINGS = 3;
     private static final int PING_JITTER = 1000;
+    private static final int CONSECUTIVE_FAILURE_LIMIT = 3;
     private int FAILURE_TIMEOUT;
     private int SEND_PING_INTERVAL;
     private int FOLLOWER_PING_INTERVAL = 3000;
@@ -124,12 +125,18 @@ public class Broker {
         ExecutorService executor = Executors.newFixedThreadPool(replicationBrokers.get(queueName).size());
         AtomicInteger successCount = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(replicationBrokers.get(queueName).size());
-        for (Address follower : replicationBrokers.get(queueName)) {
+        for (Pair<Address, Integer>  follower : replicationBrokers.get(queueName)) {
             executor.submit(() -> {
                 try {
-                    boolean ackReceived = sendPingRequestToFollower(follower);
+                    boolean ackReceived = sendPingRequestToFollower(follower.first);
                     if (ackReceived) {
                         successCount.incrementAndGet();
+                    } else {
+                        follower.second++;
+                        if (follower.second >= CONSECUTIVE_FAILURE_LIMIT) {
+                            replicationBrokers.get(queueName).remove(follower);
+                            System.out.println("[INFO]: Follower failed to respond, removing it from replications :" + follower.first );
+                        }
                     }
                 } catch (Exception e) {
                     System.err.println("[ERROR]: Ping failed for " + follower + ": " + queueName);
@@ -385,7 +392,7 @@ public class Broker {
 
     private void registerReplica(String queueName, Address broker) {
         replicationBrokers.computeIfAbsent(queueName, k -> new ArrayList<>())
-                .add(broker);
+                .add(new Pair<Address, Integer>(broker, 0));
     }
 
 
@@ -393,21 +400,21 @@ public class Broker {
     public void updateReplications(Message request, String originalClientId) {
         String requestType = request.getType();
         String queueName = request.getQueueName();
-        List<Address> brokersToSend = replicationBrokers.get(queueName);
+        List<Pair<Address, Integer>> brokersToSend = replicationBrokers.get(queueName);
         if (brokersToSend == null) { return; } // there is no replication for this queue
 
         int replicationCount = brokersToSend.size();
         ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
         AtomicInteger successCount = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(replicationCount);
-        for (Address brokerToSend : brokersToSend) {
+        for (Pair<Address, Integer> brokerToSend : brokersToSend) {
             executor.submit(() -> {
                 try {
                     boolean ackReceived = false;
                     if (requestType.equals(Operation.WRITE)){
-                        ackReceived = sendAppendMessageRequestWithClientId(request, brokerToSend, originalClientId);
+                        ackReceived = sendAppendMessageRequestWithClientId(request, brokerToSend.first, originalClientId);
                     } else if (requestType.equals(Operation.READ)){
-                        ackReceived = sendReadMessageRequestWithClientId(request, brokerToSend, originalClientId);
+                        ackReceived = sendReadMessageRequestWithClientId(request, brokerToSend.first, originalClientId);
                     }
 
                     if (ackReceived) {
