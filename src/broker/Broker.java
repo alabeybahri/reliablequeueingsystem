@@ -154,8 +154,14 @@ public class Broker {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+
+        if (successCount.get()  == replicationBrokers.get(queueName).size()) {
+            System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
+        } else {
+            System.out.println("[INFO]: [Broker: " + port +  "] Not received all the ACKs.");
+        }
         executor.shutdown();
-        System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
+
         return successCount.get();
     }
 
@@ -192,7 +198,7 @@ public class Broker {
                 }
                 brokerOutputStreams.remove(follower);
                 brokerInputStreams.remove(follower);
-                return true;
+                return false;
             }
         }
     }
