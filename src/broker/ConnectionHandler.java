@@ -85,6 +85,7 @@ public class ConnectionHandler implements Runnable {
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Successfully added a queue with this name");
             broker.updateQueueAddressMap(request.getQueueName());
+            broker.startPeriodicPingFollowers(request.getQueueName());
         }
     }
 
@@ -181,6 +182,9 @@ public class ConnectionHandler implements Runnable {
                 handleReadMessage(request, response);
                 break;
             case ACK:
+                break;
+            case PING:
+                response.setMessageType(MessageType.ACK);
                 break;
             default:
                 response.setMessageType(MessageType.NACK);

@@ -89,6 +89,20 @@ public class Broker {
         }, 0, SEND_PING_INTERVAL, TimeUnit.MILLISECONDS);
     }
 
+    public void startPeriodicPingFollowers(String queueName) {
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                Thread.sleep(random.nextInt(PING_JITTER));
+                createPingToFollowers(queueName);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }, 0, SEND_PING_INTERVAL, TimeUnit.MILLISECONDS);
+
+    }
+
 
     /**
      * Sends ping messages to its own replication nodes as a heartbeat.
@@ -103,6 +117,78 @@ public class Broker {
         brokerMulticastSocket.send(datagramPacket);
 //        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
     }
+
+
+    private int createPingToFollowers(String queueName) {
+        ExecutorService executor = Executors.newFixedThreadPool(replicationBrokers.get(queueName).size());
+        AtomicInteger successCount = new AtomicInteger(0);
+        CountDownLatch latch = new CountDownLatch(replicationBrokers.get(queueName).size());
+        for (Address follower : replicationBrokers.get(queueName)) {
+            executor.submit(() -> {
+                try {
+                    boolean ackReceived = sendPingRequestToFollower(follower);
+                    if (ackReceived) {
+                        successCount.incrementAndGet();
+                    }
+                } catch (Exception e) {
+                    System.err.println("[ERROR]: Ping failed for " + follower + ": " + queueName);
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        try {
+            boolean allDone = latch.await(10, TimeUnit.SECONDS);
+            if (!allDone) {
+                System.out.println("[ERROR]: Timeout waiting for ping replies");
+            }
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        executor.shutdown();
+        System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
+        return successCount.get();
+    }
+
+
+    private boolean sendPingRequestToFollower(Address follower) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(follower);
+            ObjectOutputStream out = brokerOutputStreams.get(follower);
+            ObjectInputStream in = brokerInputStreams.get(follower);
+
+            InterBrokerMessage request = new InterBrokerMessage();
+            request.setMessageType(MessageType.PING);
+            request.setPort(port);
+            out.writeObject(request);
+            out.flush();
+
+            socket.setSoTimeout(5000); // 5 seconds for ACK
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING message request" + follower);
+            return response.getMessageType() == MessageType.ACK;
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("[INFO]: [Broker: " + port + "] ACK not received from" + follower);
+
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(follower);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                    return false;
+                }
+                brokerOutputStreams.remove(follower);
+                brokerInputStreams.remove(follower);
+                return true;
+            }
+        }
+    }
+
 
     /**
      * Sends datagram packet to multicast group to notify newly created queue.
