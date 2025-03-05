@@ -6,9 +6,9 @@ import common.enums.ResponseType;
 
 import java.io.*;
 import java.net.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
+import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Client {
     private Socket socket;
@@ -16,18 +16,79 @@ public class Client {
     private ObjectInputStream in;
     private Scanner scanner;
 
-    // Multicast configuration
     private static final String MULTICAST_ADDRESS = "224.0.0.1";
     private static final int MULTICAST_PORT = 5010;
-    private static final int DISCOVERY_TIMEOUT = 1000; // 1 second timeout
-    private List<Address> brokerCache = new ArrayList<>();
+    private static final int DISCOVERY_TIMEOUT = 1000;
+    private static final int DISCOVERY_INTERVAL = 500;
+
+    private CopyOnWriteArrayList<Address> brokerCache = new CopyOnWriteArrayList<>();
+
+    private AtomicBoolean runDiscovery = new AtomicBoolean(true);
+    private AtomicBoolean isConnected = new AtomicBoolean(false);
+
+    private Thread discoveryThread;
 
     public Client() {
         scanner = new Scanner(System.in);
-        discoverBrokers();
+        startContinuousDiscovery();
+
+        discoverBrokers(true);
         if (brokerCache.isEmpty()) {
             System.out.println("No brokers found.");
         }
+    }
+
+    private void startContinuousDiscovery() {
+        discoveryThread = new Thread(() -> {
+            while (runDiscovery.get()) {
+                try {
+                    Thread.sleep(DISCOVERY_INTERVAL);
+
+                    if (isConnected.get()) {
+                        continue;
+                    }
+
+                    List<Address> previousBrokers = new ArrayList<>(brokerCache);
+
+                    discoverBrokers(false);
+
+                    compareAndLogBrokerChanges(previousBrokers, brokerCache);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        });
+        discoveryThread.setDaemon(true);
+        discoveryThread.start();
+    }
+
+    private void compareAndLogBrokerChanges(List<Address> previousBrokers, List<Address> currentBrokers) {
+        Set previousBrokersSet = new HashSet<>(previousBrokers);
+        Set currentBrokersSet = new HashSet<>(currentBrokers);
+
+        if (previousBrokersSet.equals(currentBrokersSet)) {
+            return;
+        }
+
+        for (Address broker : currentBrokers) {
+            if (!previousBrokers.contains(broker)) {
+                System.out.println("New broker joined: " + broker.getHost() + ":" + broker.getPort());
+            }
+        }
+
+        for (Address broker : previousBrokers) {
+            if (!currentBrokers.contains(broker)) {
+                System.out.println("Broker left: " + broker.getHost() + ":" + broker.getPort());
+            }
+        }
+
+        System.out.println("Brokers are updated. Found " + currentBrokers.size() + " brokers. Current brokers:");
+        for (Address broker : currentBrokers) {
+            System.out.println(broker.getHost() + ":" + broker.getPort());
+        }
+        System.out.print("You can connect any of them by specifying the ip and the port or the broker index.\n> ");
+
     }
 
     public void start() {
@@ -40,41 +101,13 @@ public class Client {
             try {
                 switch (command) {
                     case Operation.CREATE:
-                        if (socket == null || !socket.isConnected()) {
-                            System.out.println("Not connected to any broker. ");
-                            continue;
-                        }
-                        if (parts.length != 2) {
-                            System.out.println("Usage: create <queue_name>");
-                            continue;
-                        }
-                        request.setType(Operation.CREATE);
-                        request.setQueueName(parts[1]);
-                        break;
                     case Operation.READ:
-                        if (socket == null || !socket.isConnected()) {
-                            System.out.println("Not connected to any broker. ");
-                            continue;
-                        }
-                        if (parts.length != 2) {
-                            System.out.println("Usage: read <queue_name>");
-                            continue;
-                        }
-                        request.setType(Operation.READ);
-                        request.setQueueName(parts[1]);
-                        break;
                     case Operation.WRITE:
                         if (socket == null || !socket.isConnected()) {
                             System.out.println("Not connected to any broker. ");
                             continue;
                         }
-                        if (parts.length != 3) {
-                            System.out.println("Usage: write <queue_name> <value>");
-                            continue;
-                        }
-                        request.setType(Operation.WRITE);
-                        request.setQueueName(parts[1]);
-                        request.setValue(Integer.parseInt(parts[2]));
+                        processOperation(command, parts, request);
                         break;
                     case Operation.CONNECT:
                         if (parts.length != 3 && parts.length != 2) {
@@ -98,7 +131,7 @@ public class Client {
                             continue;
                         }
                         disconnectFromBroker();
-                        discoverBrokers();
+                        discoverBrokers(true);
                         continue;
                     default:
                         System.out.println("Invalid command. Use: create, read, write, connect!");
@@ -122,6 +155,36 @@ public class Client {
         }
     }
 
+    private void processOperation(String command, String[] parts, Message request) {
+        switch (command) {
+            case Operation.CREATE:
+                if (parts.length != 2) {
+                    System.out.println("Usage: create <queue_name>");
+                    return;
+                }
+                request.setType(Operation.CREATE);
+                request.setQueueName(parts[1]);
+                break;
+            case Operation.READ:
+                if (parts.length != 2) {
+                    System.out.println("Usage: read <queue_name>");
+                    return;
+                }
+                request.setType(Operation.READ);
+                request.setQueueName(parts[1]);
+                break;
+            case Operation.WRITE:
+                if (parts.length != 3) {
+                    System.out.println("Usage: write <queue_name> <value>");
+                    return;
+                }
+                request.setType(Operation.WRITE);
+                request.setQueueName(parts[1]);
+                request.setValue(Integer.parseInt(parts[2]));
+                break;
+        }
+    }
+
 
     private void connectToBroker(String host, int port) {
         try {
@@ -129,8 +192,10 @@ public class Client {
             socket = new Socket(host, port);
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
+            isConnected.set(true);
             System.out.println("Connected to broker at " + host + ":" + port);
         } catch (IOException e) {
+            isConnected.set(false);
             e.printStackTrace();
         }
     }
@@ -143,8 +208,10 @@ public class Client {
             socket = new Socket(host, port);
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
+            isConnected.set(true);
             System.out.println("Connected to broker at " + host + ":" + port);
         } catch (IOException e) {
+            isConnected.set(false);
             e.printStackTrace();
         }
     }
@@ -152,27 +219,26 @@ public class Client {
     private void disconnectFromBroker() {
         try {
             socket.close();
+            isConnected.set(false);
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
 
-    private void discoverBrokers() {
+
+    private void discoverBrokers(boolean initialDiscovery) {
         try {
             brokerCache.clear();
             MulticastSocket multicastSocket = new MulticastSocket();
             multicastSocket.setSoTimeout(DISCOVERY_TIMEOUT);
             InetAddress group = InetAddress.getByName(MULTICAST_ADDRESS);
 
-
-            // Send discovery message
             String message = "DISCOVER_BROKERS";
             byte[] messageBytes = message.getBytes();
             DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, group, MULTICAST_PORT);
             multicastSocket.send(packet);
 
-            // Receive responses
             while (true) {
                 try {
                     byte[] buffer = new byte[1024];
@@ -180,12 +246,19 @@ public class Client {
                     multicastSocket.receive(responsePacket);
                     Integer brokerHost = Integer.parseInt(new String(responsePacket.getData(), 0, responsePacket.getLength()));
                     String brokerIP = responsePacket.getAddress().getHostAddress();
-                    brokerCache.add(new Address(brokerIP, brokerHost));
-                    System.out.println("Discovered broker at " + brokerIP + ":" + brokerHost);
+                    Address newBroker = new Address(brokerIP, brokerHost);
 
+                    if (!brokerCache.contains(newBroker)) {
+                        brokerCache.add(newBroker);
+                        if (initialDiscovery) {
+                            System.out.println("Found broker: " + newBroker.getHost() + ":" + newBroker.getPort());
+                        }
+                    }
                 } catch (SocketTimeoutException e) {
-                    System.out.println("Discovery complete. Found " + brokerCache.size() + " brokers.\nYou can connect any of them by specifying the ip and the port or the broker index.");
-                    break; // Stop after timeout
+                    if (initialDiscovery) {
+                        System.out.println("Discovery complete. Found " + brokerCache.size() + " brokers.\nYou can connect any of them by specifying the ip and the port or the broker index.");
+                    }
+                    break;
                 }
             }
             multicastSocket.close();
@@ -194,13 +267,10 @@ public class Client {
         }
     }
 
-
     private String[] getCommand() {
         System.out.print("> ");
         String line = scanner.nextLine().trim();
         String[] parts = line.split(" ");
         return parts;
-
     }
-
 }
