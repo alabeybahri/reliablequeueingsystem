@@ -52,7 +52,7 @@ public class Client {
 
                     discoverBrokers(false);
 
-                    compareAndLogBrokerChanges(previousBrokers, brokerCache);
+                    compareAndLogBrokerChanges(previousBrokers, brokerCache, true);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
@@ -63,7 +63,7 @@ public class Client {
         discoveryThread.start();
     }
 
-    private void compareAndLogBrokerChanges(List<Address> previousBrokers, List<Address> currentBrokers) {
+    private void compareAndLogBrokerChanges(List<Address> previousBrokers, List<Address> currentBrokers, boolean showSymbol) {
         Set previousBrokersSet = new HashSet<>(previousBrokers);
         Set currentBrokersSet = new HashSet<>(currentBrokers);
 
@@ -83,12 +83,14 @@ public class Client {
             }
         }
 
-        System.out.println("Brokers are updated. Found " + currentBrokers.size() + " brokers. Current brokers:");
-        for (Address broker : currentBrokers) {
-            System.out.println(broker.getHost() + ":" + broker.getPort());
+        System.out.println("Brokers are updated. Found " + currentBrokers.size() + " brokers.");
+        System.out.println("You can connect any of them by specifying the ip and the port or the broker index.");
+        System.out.print("Current brokers:" + brokerCache);
+        if (showSymbol) {
+            System.out.print("\n> ");
+        }else{
+            System.out.println();
         }
-        System.out.print("You can connect any of them by specifying the ip and the port or the broker index.\n> ");
-
     }
 
     public void start() {
@@ -150,7 +152,11 @@ public class Client {
                     System.out.println("Error: " + response.getResponseMessage());
                 }
             } catch (Exception e) {
-                System.out.println("Error: " + e.getMessage());
+                System.out.println("Current broker disconnected, rediscovering other brokers");
+                List<Address> previousBrokers = new ArrayList<>(brokerCache);
+                disconnectFromBroker();
+                discoverBrokers(false);
+                compareAndLogBrokerChanges(previousBrokers, brokerCache,false);
             }
         }
     }
@@ -251,12 +257,13 @@ public class Client {
                     if (!brokerCache.contains(newBroker)) {
                         brokerCache.add(newBroker);
                         if (initialDiscovery) {
-                            System.out.println("Found broker: " + newBroker.getHost() + ":" + newBroker.getPort());
+                            System.out.println("Found new broker: " + newBroker.getHost() + ":" + newBroker.getPort());
                         }
                     }
                 } catch (SocketTimeoutException e) {
                     if (initialDiscovery) {
                         System.out.println("Discovery complete. Found " + brokerCache.size() + " brokers.\nYou can connect any of them by specifying the ip and the port or the broker index.");
+                        System.out.println("Current brokers:" + brokerCache);
                     }
                     break;
                 }
