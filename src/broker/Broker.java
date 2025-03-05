@@ -31,6 +31,7 @@ public class Broker {
     private static final int PING_JITTER = 1000;
     private int FAILURE_TIMEOUT;
     private int SEND_PING_INTERVAL;
+    private int FOLLOWER_PING_INTERVAL = 3000;
     private Random random;
     // Persistent socket pool for broker-broker connections
     private Map<Address, Socket> brokerSocketPool = new ConcurrentHashMap<>();
@@ -99,7 +100,7 @@ public class Broker {
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
-        }, 0, SEND_PING_INTERVAL, TimeUnit.MILLISECONDS);
+        }, 0, FOLLOWER_PING_INTERVAL, TimeUnit.MILLISECONDS);
 
     }
 
