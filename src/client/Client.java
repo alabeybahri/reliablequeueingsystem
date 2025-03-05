@@ -154,7 +154,9 @@ public class Client {
             } catch (Exception e) {
                 System.out.println("Current broker disconnected, rediscovering other brokers");
                 List<Address> previousBrokers = new ArrayList<>(brokerCache);
-                disconnectFromBroker();
+                if (socket.isConnected() && !socket.isClosed() && !socket.isInputShutdown() && !socket.isOutputShutdown()) {
+                    disconnectFromBroker();
+                }
                 discoverBrokers(false);
                 compareAndLogBrokerChanges(previousBrokers, brokerCache,false);
             }
