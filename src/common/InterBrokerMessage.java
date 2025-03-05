@@ -3,7 +3,6 @@ package common;
 import common.enums.MessageType;
 
 import java.io.*;
-import java.util.UUID;
 
 public class InterBrokerMessage implements Serializable {
     private MessageType messageType;

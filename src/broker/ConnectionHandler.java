@@ -1,5 +1,6 @@
 package broker;
 
+import common.Address;
 import common.InterBrokerMessage;
 import common.Message;
 import common.Operation;
@@ -89,7 +90,7 @@ public class ConnectionHandler implements Runnable {
 
     private void handleQueueWrite(Message request, Message response) {
         if (this.broker.queues.get(request.getQueueName()) == null) {
-            String leaderAddress = this.broker.queueAddressMap.get(request.getQueueName()).toString();
+            Address leaderAddress = this.broker.queueAddressMap.get(request.getQueueName());
             if (leaderAddress == null) {
                 response.setResponseType(ResponseType.ERROR);
                 response.setResponseMessage("There is no queue");
