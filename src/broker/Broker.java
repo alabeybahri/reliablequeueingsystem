@@ -274,7 +274,7 @@ public class Broker {
             socket.setSoTimeout(5000); // 5 seconds for ACK
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for replication request: " + response);
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for replication message request, queue:" + request.getQueueName() + " from" + broker);
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
@@ -362,7 +362,7 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request: " + response);
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request, queue:" + replicationRequest.getQueueName() + " from" + broker);
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
@@ -400,82 +400,7 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request: " + response);
-            return response.getMessageType() == MessageType.ACK;
-
-        } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[ERROR]: Read message to replication failed for " + broker + ": " + e.getMessage());
-
-            // Remove problematic socket from pool
-            synchronized (brokerSocketLock) {
-                Socket socket = brokerSocketPool.remove(broker);
-                try {
-                    if (socket != null) socket.close();
-                } catch (IOException closeEx) {
-                    System.err.println("Error closing socket: " + closeEx.getMessage());
-                }
-                brokerOutputStreams.remove(broker);
-                brokerInputStreams.remove(broker);
-            }
-
-            return false;
-        }
-    }
-
-    private boolean sendAppendMessageRequest(Message request, Address broker) {
-        try {
-            Socket socket = getOrCreateBrokerSocket(broker);
-            ObjectOutputStream out = brokerOutputStreams.get(broker);
-            ObjectInputStream in = brokerInputStreams.get(broker);
-
-            InterBrokerMessage replicationRequest = new InterBrokerMessage();
-            replicationRequest.setMessageType(MessageType.APPEND_MESSAGE);
-            replicationRequest.setData(request.getValue());
-            replicationRequest.setQueueName(request.getQueueName());
-            out.writeObject(replicationRequest);
-            out.flush();
-
-            socket.setSoTimeout(5000);
-
-            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request: " + response);
-            return response.getMessageType() == MessageType.ACK;
-
-        } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[ERROR]: Append message to replication failed for " + broker + ": " + e.getMessage());
-
-            // Remove problematic socket from pool
-            synchronized (brokerSocketLock) {
-                Socket socket = brokerSocketPool.remove(broker);
-                try {
-                    if (socket != null) socket.close();
-                } catch (IOException closeEx) {
-                    System.err.println("Error closing socket: " + closeEx.getMessage());
-                }
-                brokerOutputStreams.remove(broker);
-                brokerInputStreams.remove(broker);
-            }
-
-            return false;
-        }
-    }
-
-    private boolean sendReadMessageRequest(Message request, Address broker) {
-        try {
-            Socket socket = getOrCreateBrokerSocket(broker);
-            ObjectOutputStream out = brokerOutputStreams.get(broker);
-            ObjectInputStream in = brokerInputStreams.get(broker);
-
-            InterBrokerMessage readRequest = new InterBrokerMessage();
-            readRequest.setMessageType(MessageType.READ_MESSAGE);
-            readRequest.setQueueName(request.getQueueName());
-            out.writeObject(readRequest);
-            out.flush();
-
-            socket.setSoTimeout(5000);
-
-            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request: " + response);
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request, queue:" + readRequest.getQueueName() + " from" + broker);
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
