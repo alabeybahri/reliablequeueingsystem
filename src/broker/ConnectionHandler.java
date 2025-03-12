@@ -11,11 +11,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 
 public class ConnectionHandler implements Runnable {
     private Socket socket;
@@ -23,7 +19,6 @@ public class ConnectionHandler implements Runnable {
     private Broker broker;
     private ObjectInputStream in;
     private ObjectOutputStream out;
-    private Map<String, String> replicationClientMap = new ConcurrentHashMap<>();
 
     public ConnectionHandler(Socket socket, String clientId, Broker broker) {
         this.socket = socket;
@@ -33,7 +28,7 @@ public class ConnectionHandler implements Runnable {
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
         } catch (IOException e) {
-            e.printStackTrace();
+            System.out.println("Connection error");
         }
     }
 
@@ -84,6 +79,7 @@ public class ConnectionHandler implements Runnable {
             broker.createReplication(request.getQueueName());
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Successfully added a queue with this name");
+            broker.terms.put(request.getQueueName(), 1);
             broker.updateQueueAddressMap(request.getQueueName());
             broker.startPeriodicPingFollowers(request.getQueueName());
         }
@@ -166,7 +162,6 @@ public class ConnectionHandler implements Runnable {
     }
 
 
-    //TODO: burda senkronizasyon halledilmeli
     private InterBrokerMessage processBrokerRequest(InterBrokerMessage request) throws IOException {
         MessageType messageType = request.getMessageType();
         InterBrokerMessage response = new InterBrokerMessage();
@@ -184,13 +179,37 @@ public class ConnectionHandler implements Runnable {
             case ACK:
                 break;
             case PING:
-                response.setMessageType(MessageType.ACK);
+                handlePingMessage(request, response);
+                break;
+            case ELECTION:
+                handleElectionMessage(request, response);
                 break;
             default:
                 response.setMessageType(MessageType.NACK);
                 break;
         }
         return response;
+    }
+
+    private void handleElectionMessage(InterBrokerMessage request, InterBrokerMessage response) {
+        System.out.println("Election message received");
+        String queueName = request.getQueueName();
+        int voteTerm = request.getTerm();
+        int currentTerm = broker.terms.get(queueName);
+        response.setMessageType(MessageType.VOTE);
+        if (!broker.votesGranted.containsKey(queueName)) {
+            broker.votesGranted.put(queueName, new HashSet<>());
+        }
+        boolean vote = voteTerm > currentTerm;
+        // if given term, the broker already positive vote do not send positive vote for that term.
+        vote = vote && !broker.votesGranted.get(queueName).contains(voteTerm);
+
+        if (vote) {
+            broker.votesGranted.get(queueName).add(voteTerm);
+        }
+
+        response.setVote(vote);
+        System.out.println("Voting : " + vote + ", Vote term: " + voteTerm + " current term: " + currentTerm);
     }
 
     private void handleReplicationRequest(InterBrokerMessage request, InterBrokerMessage response) {
@@ -203,15 +222,15 @@ public class ConnectionHandler implements Runnable {
             return;
         }
 
-        // Initialize replication for the queue
         broker.replications.put(queueName, new ArrayList<>());
-
-        // Initialize client offsets for this replication
+        broker.terms.put(queueName, 1);
         Map<String, Integer> replicationOffset = new HashMap<>();
         broker.replicationClientOffsets.put(queueName, replicationOffset);
-
+        List<Address> otherFollowers = new ArrayList<>(request.getFollowerAddresses());
+        broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
         response.setMessageType(MessageType.ACK);
         System.out.println("Replicated queue " + queueName);
+        broker.electionHandler.createElectionTimeout(request.getQueueName()); //create scheduler in the pool, start timeout
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -271,5 +290,24 @@ public class ConnectionHandler implements Runnable {
             response.setMessageType(MessageType.NACK);
             System.out.println("No more messages in replicated queue " + queueName);
         }
+    }
+
+    private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
+        String queueName = request.getQueueName();
+        broker.electionHandler.resetElectionTimeout(queueName);
+        int currentTerm = broker.terms.get(queueName);
+        int receivingTerm = request.getTerm();
+        List<Address> newOtherFollowerAddresses = request.getFollowerAddresses();
+        newOtherFollowerAddresses.remove(broker.brokerAddress);
+        broker.otherFollowers.put(queueName, newOtherFollowerAddresses);
+
+        if (currentTerm != receivingTerm) {
+            System.err.println("[ERROR]: mismatch of terms. Expected term " + currentTerm + " but received term " + receivingTerm + " for queue " + queueName);
+            response.setMessageType(MessageType.NACK); // belki baska bisey yapilir bilemedim
+            return;
+        }
+
+        broker.terms.put(queueName, receivingTerm);
+        response.setMessageType(MessageType.ACK);
     }
 }

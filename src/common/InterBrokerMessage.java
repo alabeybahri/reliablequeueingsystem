@@ -3,6 +3,7 @@ package common;
 import common.enums.MessageType;
 
 import java.io.*;
+import java.util.List;
 
 public class InterBrokerMessage implements Serializable {
     private MessageType messageType;
@@ -13,6 +14,8 @@ public class InterBrokerMessage implements Serializable {
     private boolean vote;
     private int data;
     private String originalClientId;
+    private List<Address> followerAddresses;
+
 
     public Address getLeader() {
         return leader;
@@ -75,6 +78,14 @@ public class InterBrokerMessage implements Serializable {
         this.data = data;
     }
 
+    public String getOriginalClientId() {
+        return originalClientId;
+    }
+
+    public void setOriginalClientId(String originalClientId) {
+        this.originalClientId = originalClientId;
+    }
+
     public boolean isVote() {
         return vote;
     }
@@ -83,12 +94,12 @@ public class InterBrokerMessage implements Serializable {
         this.vote = vote;
     }
 
-    public String getOriginalClientId() {
-        return originalClientId;
+    public List<Address> getFollowerAddresses() {
+        return followerAddresses;
     }
 
-    public void setOriginalClientId(String originalClientId) {
-        this.originalClientId = originalClientId;
+    public void setFollowerAddresses(List<Address> followerAddresses) {
+        this.followerAddresses = followerAddresses;
     }
 }
 

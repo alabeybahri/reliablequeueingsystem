@@ -10,7 +10,7 @@ import common.*;
 import common.enums.MessageType;
 
 public class Broker {
-    private int port;
+    public int port;
     public Address brokerAddress;
     public Map<String, List<Integer>> queues = new ConcurrentHashMap<>();
     public Map<String, Map<String, Integer>> clientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
@@ -21,6 +21,9 @@ public class Broker {
     public Map<String, List<Pair<Address, Integer>>> replicationBrokers = new ConcurrentHashMap<>(); // replication broker addresses of this leader
     public Map<String, Map<String, Integer>> replicationClientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
     public Map<String, List<Integer>> replications = new ConcurrentHashMap<>(); // replicated queues, leader is another broker
+    public Map<String, List<Address>> otherFollowers = new ConcurrentHashMap<>();
+    public Map<String, HashSet<Integer>> votesGranted = new ConcurrentHashMap<>(); // given votes for terms, if a vote for a term given put term number into the set
+    public Map<String, Integer> terms = new ConcurrentHashMap<>();
     private static final String CLIENT_MULTICAST_ADDRESS = "239.255.0.2";
     private static final int CLIENT_MULTICAST_PORT = 5010;
     private static final String BROKER_MULTICAST_ADDRESS = "239.255.0.1";
@@ -30,23 +33,24 @@ public class Broker {
     private static final int NUM_ALLOWED_MISSED_PINGS = 3;
     private static final int PING_JITTER = 1000;
     private static final int CONSECUTIVE_FAILURE_LIMIT = 3;
+    private int FOLLOWER_PING_INTERVAL = 1000;
     private int FAILURE_TIMEOUT;
     private int SEND_PING_INTERVAL;
-    private int FOLLOWER_PING_INTERVAL = 3000;
-    private Random random;
+    public Random random;
     // Persistent socket pool for broker-broker connections
     private Map<Address, Socket> brokerSocketPool = new ConcurrentHashMap<>();
     private Map<Address, ObjectOutputStream> brokerOutputStreams = new ConcurrentHashMap<>();
     private Map<Address, ObjectInputStream> brokerInputStreams = new ConcurrentHashMap<>();
     private final Object brokerSocketLock = new Object();
-
+    public final Election electionHandler;
 
     public Broker(int port) throws IOException {
         this.port = port;
-        this.brokerAddress = new Address(LocalIP.getLocalIP().toString(),port);
+        this.brokerAddress = new Address(LocalIP.getLocalIP().toString(), port);
         this.random = new Random(brokerAddress.hashCode());
         FAILURE_TIMEOUT = random.nextInt(MAX_FAILURE_TIMEOUT - MIN_FAILURE_TIMEOUT) + MIN_FAILURE_TIMEOUT;
         SEND_PING_INTERVAL = (int) (FAILURE_TIMEOUT * 0.75 / NUM_ALLOWED_MISSED_PINGS);
+        electionHandler = new Election(this);
         startMulticastListener();
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
@@ -112,7 +116,7 @@ public class Broker {
      */
     private void sendPingRequest() throws IOException {
         InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
-        interBrokerMessage.setMessageType(MessageType.PING);
+        interBrokerMessage.setMessageType(MessageType.DISCOVER);
         interBrokerMessage.setPort(port);
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
@@ -121,16 +125,17 @@ public class Broker {
     }
 
 
-    private int createPingToFollowers(String queueName) {
+    private void createPingToFollowers(String queueName) {
         ExecutorService executor = Executors.newFixedThreadPool(replicationBrokers.get(queueName).size());
         AtomicInteger successCount = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(replicationBrokers.get(queueName).size());
         for (Pair<Address, Integer>  follower : replicationBrokers.get(queueName)) {
             executor.submit(() -> {
                 try {
-                    boolean ackReceived = sendPingRequestToFollower(follower.first);
+                    boolean ackReceived = sendPingRequestToFollower(follower.first, queueName);
                     if (ackReceived) {
                         successCount.incrementAndGet();
+                        follower.second = 0;
                     } else {
                         follower.second++;
                         if (follower.second >= CONSECUTIVE_FAILURE_LIMIT) {
@@ -155,18 +160,18 @@ public class Broker {
             Thread.currentThread().interrupt();
         }
 
-        if (successCount.get()  == replicationBrokers.get(queueName).size()) {
+        if (successCount.get()  == replicationBrokers.get(queueName).size() && !replicationBrokers.get(queueName).isEmpty()) {
             System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
-        } else {
+        } else if (!replicationBrokers.get(queueName).isEmpty()) {
             System.out.println("[INFO]: [Broker: " + port +  "] Not received all the ACKs.");
         }
         executor.shutdown();
 
-        return successCount.get();
+        successCount.get();
     }
 
 
-    private boolean sendPingRequestToFollower(Address follower) {
+    private boolean sendPingRequestToFollower(Address follower, String queueName){
         try {
             Socket socket = getOrCreateBrokerSocket(follower);
             ObjectOutputStream out = brokerOutputStreams.get(follower);
@@ -174,14 +179,20 @@ public class Broker {
 
             InterBrokerMessage request = new InterBrokerMessage();
             request.setMessageType(MessageType.PING);
+            request.setQueueName(queueName);
+            request.setTerm(terms.get(queueName));
             request.setPort(port);
+            List<Address> followers = new ArrayList();
+            replicationBrokers.get(queueName).forEach(p ->
+                followers.add(p.first));
+            request.setFollowerAddresses(followers);
             out.writeObject(request);
             out.flush();
 
             socket.setSoTimeout(5000); // 5 seconds for ACK
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING message request" + follower);
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING message request " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName));
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
@@ -284,7 +295,7 @@ public class Broker {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     brokerMulticastSocket.receive(packet);
                     InterBrokerMessage receivedInterBrokerMessage = InterBrokerMessage.deserializeFromBytes(packet.getData());
-                    if (receivedInterBrokerMessage.getMessageType().equals(MessageType.PING) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
+                    if (receivedInterBrokerMessage.getMessageType().equals(MessageType.DISCOVER) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
                         sendPingResponse();
                         registerBroker(new Address(packet.getAddress().getHostAddress(), receivedInterBrokerMessage.getPort()));
                     }
@@ -316,14 +327,14 @@ public class Broker {
      * @return Number of successfully created replicas excluding leader.
      */
     public int createReplication(String queueName){
-        int replicationCount = (knownBrokers.size() + 1) / 2;
+        int replicationCount = knownBrokers.size(); // (knownBrokers.size() + 1) / 2;
         if (replicationCount < 1) {
             System.out.println("[ERROR]: Not enough brokers to replicate queue: ");
             return -1;
         }
         List<Address> shuffledBrokers = new ArrayList<>(knownBrokers);
         Collections.shuffle(shuffledBrokers);
-        List<Address> selectedBrokers = shuffledBrokers.subList(0, replicationCount);
+        List<Address> selectedBrokers = new ArrayList<>(shuffledBrokers.subList(0, replicationCount));
 
         ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
         AtomicInteger successCount = new AtomicInteger(0);
@@ -332,7 +343,7 @@ public class Broker {
         for (Address broker : selectedBrokers) {
             executor.submit(() -> {
                 try {
-                    boolean ackReceived = sendReplicationRequest(queueName, broker);
+                    boolean ackReceived = sendReplicationRequest(queueName, broker, selectedBrokers);
                     if (ackReceived) {
                         successCount.incrementAndGet();
                         registerReplica(queueName, broker);
@@ -359,7 +370,7 @@ public class Broker {
     }
 
 
-    private boolean sendReplicationRequest(String queueName, Address broker) {
+    private boolean sendReplicationRequest(String queueName, Address broker, List<Address> allFollowers) {
         try {
             Socket socket = getOrCreateBrokerSocket(broker);
             ObjectOutputStream out = brokerOutputStreams.get(broker);
@@ -368,8 +379,11 @@ public class Broker {
             InterBrokerMessage request = new InterBrokerMessage();
             request.setMessageType(MessageType.REPLICATION);
             request.setQueueName(queueName);
+            allFollowers.remove(broker);
+            request.setFollowerAddresses(allFollowers);
             out.writeObject(request);
             out.flush();
+            allFollowers.add(broker);
 
             socket.setSoTimeout(5000); // 5 seconds for ACK
 
@@ -500,11 +514,13 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request, queue:" + readRequest.getQueueName() + " from" + broker);
+            if (response.getMessageType() == MessageType.ACK) {
+                System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request, queue:" + readRequest.getQueueName() + " from" + broker);
+            }
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[ERROR]: Read message to replication failed for " + broker + ": " + e.getMessage());
+            System.err.println("[ERROR]: Read message to replication failed for " + broker );
 
             // Remove problematic socket from pool
             synchronized (brokerSocketLock) {
@@ -512,7 +528,7 @@ public class Broker {
                 try {
                     if (socket != null) socket.close();
                 } catch (IOException closeEx) {
-                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                    System.err.println("[ERROR]: closing socket: " + closeEx.getMessage());
                 }
                 brokerOutputStreams.remove(broker);
                 brokerInputStreams.remove(broker);
@@ -520,6 +536,28 @@ public class Broker {
 
             return false;
         }
+    }
+
+    public InterBrokerMessage sendElectionMessage(Address broker, String queueName, int electionTerm){
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            InterBrokerMessage electionRequest = new InterBrokerMessage();
+            votesGranted.computeIfAbsent(queueName, k -> new HashSet<>()).add(electionTerm);
+            electionRequest.setQueueName(queueName);
+            electionRequest.setTerm(electionTerm);
+            electionRequest.setMessageType(MessageType.ELECTION);
+            out.writeObject(electionRequest);
+            out.flush();
+            socket.setSoTimeout(5000);
+
+            ObjectInputStream in = brokerInputStreams.get(broker);
+            return (InterBrokerMessage) in.readObject();
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("[ERROR]: Election message failed to " + broker);
+        }
+        return null;
     }
 
     private synchronized Socket getOrCreateBrokerSocket(Address brokerAddress) throws IOException {

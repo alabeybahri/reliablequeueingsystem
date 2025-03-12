@@ -37,7 +37,12 @@ public class Address implements Serializable {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        return host.equals(((Address) o).host) && port == ((Address) o).port;
+        Address other = (Address) o;
+
+        String thisHost = normalizeHost(this.host);
+        String otherHost = normalizeHost(other.host);
+
+        return this.port == other.port && Objects.equals(thisHost, otherHost);
     }
 
     @Override
@@ -45,5 +50,10 @@ public class Address implements Serializable {
         return Objects.hash(host, port);
     }
 
+
+    private String normalizeHost(String host) {
+        if (host == null) return null;
+        return host.startsWith("/") ? host.substring(1) : host;
+    }
 
 }
