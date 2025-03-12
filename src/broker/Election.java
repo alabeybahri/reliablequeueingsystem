@@ -4,9 +4,7 @@ import common.Address;
 import common.InterBrokerMessage;
 import common.enums.MessageType;
 
-import java.util.ArrayList;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -17,7 +15,7 @@ public class Election {
     private final Random random;
     private ScheduledThreadPoolExecutor schedulerExecutor;
     private Map<String, ScheduledFuture<?>> scheduledTimeouts = new ConcurrentHashMap<>();
-
+    private Map<String, HashSet<Integer>> votedSelf = new ConcurrentHashMap<>();
     public Election(Broker broker) {
         this.broker = broker;
         this.random = broker.random;
@@ -47,33 +45,63 @@ public class Election {
         int electionTerm =  broker.terms.get(queueName) + 1;
         int totalVotes = broker.otherFollowers.get(queueName).size() ; // including the leader
         ArrayList<Address> otherFollowers = new ArrayList<>(broker.otherFollowers.get(queueName));
-        //otherFollowers.add(broker.queueAddressMap.get(queueName));
 
         if (otherFollowers.isEmpty()) {
             announceLeader();
             return;
         }
 
+        broker.votesGranted.computeIfAbsent(queueName, k -> new HashSet<>());
+        votedSelf.computeIfAbsent(queueName, k -> new HashSet<>());
+
+        if(!broker.votesGranted.get(queueName).contains(electionTerm)) {
+            broker.votesGranted.get(queueName).add(electionTerm);
+            votedSelf.get(queueName).add(electionTerm);
+        }
+
 
         ExecutorService executor = Executors.newFixedThreadPool(otherFollowers.size());
         AtomicInteger voteGranted = new AtomicInteger();
-        System.out.println("[INFO]: [Broker: " + broker.port + "] Starting election for " + queueName + " with term " + electionTerm);
+        CountDownLatch latch = new CountDownLatch(otherFollowers.size());
 
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Starting election for " + queueName + " with term " + electionTerm);
 
         for (Address address : otherFollowers) {
             executor.submit(() -> {
-                InterBrokerMessage response = broker.sendElectionMessage(address, queueName, electionTerm);
-                if (response != null && response.getMessageType() == MessageType.VOTE) {
-                    if (response.isVote()){ voteGranted.getAndIncrement(); }
+                try {
+                    InterBrokerMessage response = broker.sendElectionMessage(address, queueName, electionTerm);
+                    if (response != null && response.getMessageType() == MessageType.VOTE && response.isVote()) {
+                        System.out.println("received vote true");
+                        voteGranted.getAndIncrement();
+                        }
+                } catch (Exception e) {
+                    System.err.println("Error processing election request to " + address);
+                } finally {
+                latch.countDown();
                 }
             });
         }
 
-        if (voteGranted.get() + 1 > totalVotes / 2) {
+        try {
+            boolean allDone = latch.await(10, TimeUnit.SECONDS);
+            if (!allDone) {
+                System.err.println("Election timed out waiting for votes");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        executor.shutdown();
+        int didVotedSelf = votedSelf.get(queueName).contains(electionTerm) ? 1 : 0;
+
+        System.out.println("vote granted count: " + voteGranted.get());
+        System.out.println("did voted self: " + didVotedSelf);
+        System.out.println("totalVotes: " + totalVotes);
+
+        if (voteGranted.get() + didVotedSelf > (totalVotes + 1) / 2) {
             announceLeader();
         }
     }
-
 
     public void createElectionTimeout(String queueName){
         int poolSize = schedulerExecutor.getPoolSize();
