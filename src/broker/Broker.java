@@ -189,10 +189,10 @@ public class Broker {
             out.writeObject(request);
             out.flush();
 
-            socket.setSoTimeout(5000); // 5 seconds for ACK
+            socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING message request " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName));
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName) + ": " + (response.getMessageType() == MessageType.ACK));
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {

@@ -2,6 +2,7 @@ package broker;
 
 import common.Address;
 import common.InterBrokerMessage;
+import common.Pair;
 import common.enums.MessageType;
 
 import java.util.*;
@@ -43,11 +44,11 @@ public class Election {
 
     private void startElection(String queueName) {
         int electionTerm =  broker.terms.get(queueName) + 1;
-        int totalVotes = broker.otherFollowers.get(queueName).size() ; // including the leader
+        int totalVotes = broker.otherFollowers.get(queueName).size() ;
         ArrayList<Address> otherFollowers = new ArrayList<>(broker.otherFollowers.get(queueName));
 
         if (otherFollowers.isEmpty()) {
-            announceLeader();
+            becomeLeader(queueName, electionTerm, otherFollowers);
             return;
         }
 
@@ -71,7 +72,6 @@ public class Election {
                 try {
                     InterBrokerMessage response = broker.sendElectionMessage(address, queueName, electionTerm);
                     if (response != null && response.getMessageType() == MessageType.VOTE && response.isVote()) {
-                        System.out.println("received vote true");
                         voteGranted.getAndIncrement();
                         }
                 } catch (Exception e) {
@@ -83,7 +83,7 @@ public class Election {
         }
 
         try {
-            boolean allDone = latch.await(10, TimeUnit.SECONDS);
+            boolean allDone = latch.await(5, TimeUnit.SECONDS);
             if (!allDone) {
                 System.err.println("Election timed out waiting for votes");
             }
@@ -99,18 +99,50 @@ public class Election {
         System.out.println("totalVotes: " + totalVotes);
 
         if (voteGranted.get() + didVotedSelf > (totalVotes + 1) / 2) {
-            announceLeader();
+            becomeLeader(queueName, electionTerm, otherFollowers);
+        } else {
+            System.out.println("[INFO]: [Broker: " + broker.port + "] Could not get enough votes to become leader");
         }
+
     }
 
-    public void createElectionTimeout(String queueName){
-        int poolSize = schedulerExecutor.getPoolSize();
-        schedulerExecutor.setCorePoolSize(poolSize + 1);
+    public void cancelElection(String queueName) {
+
+    }
+
+    public void createElectionTimeout(String queueName, boolean changePool){
+        if (changePool) {
+            int poolSize = schedulerExecutor.getPoolSize();
+            schedulerExecutor.setCorePoolSize(poolSize + 1);
+        }
         resetElectionTimeout(queueName);
     }
 
-    private void announceLeader() {
-        System.out.println("[INFO]:"+ broker.brokerAddress +" I am the new leader");
+    private void becomeLeader(String queueName, int newTerm, List<Address> otherFollowers) {
+        System.out.println("[INFO]:"+ broker.brokerAddress +" New leader for " + queueName + " with term " + newTerm);
+        transferData(queueName, newTerm, otherFollowers);
+        broker.startPeriodicPingFollowers(queueName);
+    }
+
+    private void transferData(String queueName, int newTerm, List<Address> otherFollowers) {
+        broker.terms.put(queueName, newTerm);
+
+        List<Integer> oldReplicatedQueue = new ArrayList<>(broker.replications.get(queueName));
+        broker.replications.remove(queueName);
+        broker.queues.put(queueName, oldReplicatedQueue);
+
+        Map<String, Integer> oldReplicationClientOffsets = new HashMap<>(broker.replicationClientOffsets.get(queueName));
+        broker.replicationClientOffsets.remove(queueName);
+        broker.clientOffsets.put(queueName, oldReplicationClientOffsets);
+
+        // add replications to replication brokers...
+        otherFollowers.forEach(address ->{
+            Pair<Address, Integer> replicationPair = new Pair<>(address, 0);
+            broker.replicationBrokers.computeIfAbsent(queueName, k -> new ArrayList<>()).add(replicationPair);
+        });
+        broker.otherFollowers.remove(queueName);
+
+        broker.terms.put(queueName, newTerm);
     }
 
 }

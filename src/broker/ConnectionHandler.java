@@ -230,7 +230,7 @@ public class ConnectionHandler implements Runnable {
         broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
         response.setMessageType(MessageType.ACK);
         System.out.println("Replicated queue " + queueName);
-        broker.electionHandler.createElectionTimeout(request.getQueueName()); //create scheduler in the pool, start timeout
+        broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -301,10 +301,12 @@ public class ConnectionHandler implements Runnable {
         newOtherFollowerAddresses.remove(broker.brokerAddress);
         broker.otherFollowers.put(queueName, newOtherFollowerAddresses);
 
-        if (currentTerm != receivingTerm) {
-            System.err.println("[ERROR]: mismatch of terms. Expected term " + currentTerm + " but received term " + receivingTerm + " for queue " + queueName);
-            response.setMessageType(MessageType.NACK); // belki baska bisey yapilir bilemedim
-            return;
+        // leader has changed
+        if (receivingTerm > currentTerm) {
+           broker.terms.put(queueName, receivingTerm);
+           broker.electionHandler.createElectionTimeout(queueName, false);
+           response.setMessageType(MessageType.ACK);
+           return;
         }
 
         broker.terms.put(queueName, receivingTerm);
