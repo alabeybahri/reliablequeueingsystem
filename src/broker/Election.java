@@ -119,7 +119,7 @@ public class Election {
     }
 
     private void becomeLeader(String queueName, int newTerm, List<Address> otherFollowers) {
-        System.out.println("[INFO]:"+ broker.brokerAddress +" New leader for " + queueName + " with term " + newTerm);
+        System.out.println("[INFO]: [Broker: " + broker.port +  "] New leader for " + queueName + " with term " + newTerm);
         transferData(queueName, newTerm, otherFollowers);
         broker.startPeriodicPingFollowers(queueName);
     }
@@ -131,11 +131,13 @@ public class Election {
         broker.replications.remove(queueName);
         broker.queues.put(queueName, oldReplicatedQueue);
 
-        Map<String, Integer> oldReplicationClientOffsets = new HashMap<>(broker.replicationClientOffsets.get(queueName));
-        broker.replicationClientOffsets.remove(queueName);
-        broker.clientOffsets.put(queueName, oldReplicationClientOffsets);
+        synchronized (broker.replicationClientOffsets) {
+            Map<String, Integer> oldReplicationClientOffsets =
+                    new HashMap<>(broker.replicationClientOffsets.get(queueName));
+            broker.replicationClientOffsets.remove(queueName);
+            broker.clientOffsets.put(queueName, oldReplicationClientOffsets);
+        }
 
-        // add replications to replication brokers...
         otherFollowers.forEach(address ->{
             Pair<Address, Integer> replicationPair = new Pair<>(address, 0);
             broker.replicationBrokers.computeIfAbsent(queueName, k -> new ArrayList<>()).add(replicationPair);

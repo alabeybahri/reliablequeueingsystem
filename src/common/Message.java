@@ -10,6 +10,7 @@ public class Message implements Serializable {
     private ResponseType responseType; // "success", "error"
     private String responseMessage;
     private Integer responseData; // for read operations
+    private String clientId;
 
     public Message() {}
 
@@ -32,4 +33,12 @@ public class Message implements Serializable {
     public void setResponseMessage(String responseMessage) { this.responseMessage = responseMessage; }
     public Integer getResponseData() { return responseData; }
     public void setResponseData(Integer responseData) { this.responseData = responseData; }
+
+    public String getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(String clientId) {
+        this.clientId = clientId;
+    }
 }

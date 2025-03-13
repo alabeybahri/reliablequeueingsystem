@@ -15,6 +15,7 @@ public class Client {
     private ObjectOutputStream out;
     private ObjectInputStream in;
     private Scanner scanner;
+    private String id;
 
     private static final String MULTICAST_ADDRESS = "224.0.0.1";
     private static final int MULTICAST_PORT = 5010;
@@ -43,15 +44,12 @@ public class Client {
             while (runDiscovery.get()) {
                 try {
                     Thread.sleep(DISCOVERY_INTERVAL);
-
                     if (isConnected.get()) {
                         continue;
                     }
 
                     List<Address> previousBrokers = new ArrayList<>(brokerCache);
-
                     discoverBrokers(false);
-
                     compareAndLogBrokerChanges(previousBrokers, brokerCache, true);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -106,7 +104,7 @@ public class Client {
                     case Operation.READ:
                     case Operation.WRITE:
                         if (socket == null || !socket.isConnected()) {
-                            System.out.println("Not connected to any broker. ");
+                            System.out.println("Not connected to any broker.");
                             continue;
                         }
                         processOperation(command, parts, request);
@@ -143,6 +141,10 @@ public class Client {
                 out.flush();
                 Message response = (Message) in.readObject();
                 if (response.getResponseType().equals(ResponseType.SUCCESS)) {
+                    if (response.getClientId() != null && this.id == null) {
+                        this.id = response.getClientId();
+                    }
+
                     if (response.getResponseData() != null) {
                         System.out.println("Received: " + response.getResponseData());
                     } else {
@@ -164,6 +166,7 @@ public class Client {
     }
 
     private void processOperation(String command, String[] parts, Message request) {
+        request.setClientId(id);
         switch (command) {
             case Operation.CREATE:
                 if (parts.length != 2) {

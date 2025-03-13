@@ -15,14 +15,14 @@ import java.util.*;
 
 public class ConnectionHandler implements Runnable {
     private Socket socket;
-    private String clientId;
+    private String connectionAddress;
     private Broker broker;
     private ObjectInputStream in;
     private ObjectOutputStream out;
 
-    public ConnectionHandler(Socket socket, String clientId, Broker broker) {
+    public ConnectionHandler(Socket socket, String connectionAddress, Broker broker) {
         this.socket = socket;
-        this.clientId = clientId;
+        this.connectionAddress = connectionAddress;
         this.broker = broker;
         try {
             out = new ObjectOutputStream(socket.getOutputStream());
@@ -54,7 +54,7 @@ public class ConnectionHandler implements Runnable {
         } catch (IOException | ClassNotFoundException e) {
             e.printStackTrace();
         } finally {
-            broker.removeClient(clientId);
+            broker.removeClient(connectionAddress);
             closeResources();
         }
     }
@@ -94,13 +94,13 @@ public class ConnectionHandler implements Runnable {
             }
             else {
                 // if there is replication, send message to replications
-                broker.updateReplications(request, this.clientId);
+                broker.updateReplications(request, request.getClientId());
                 response.setResponseMessage("This broker is not the leader of this queue, leader is: " + leaderAddress);
             }
         }
         else {
             broker.queues.get(request.getQueueName()).add(request.getValue());
-            broker.updateReplications(request, this.clientId);
+            broker.updateReplications(request, request.getClientId());
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Written successfully");
         }
@@ -120,12 +120,12 @@ public class ConnectionHandler implements Runnable {
         }
         else {
             List<Integer> queue = broker.queues.get(request.getQueueName());
-            Map<String, Integer> offsets = broker.clientOffsets.computeIfAbsent(clientId, k -> new HashMap<>());
-            int offset = offsets.getOrDefault(request.getQueueName(), 0);
+            Map<String, Integer> offsets = broker.clientOffsets.computeIfAbsent(request.getQueueName(), k -> new HashMap<>());
+            int offset = offsets.getOrDefault(request.getClientId(), 0);
             if (offset < queue.size()) {
                 Integer value = queue.get(offset);
-                offsets.put(request.getQueueName(), offset + 1);
-                broker.updateReplications(request, this.clientId);
+                offsets.put(request.getClientId(), offset + 1);
+                broker.updateReplications(request, request.getClientId());
                 response.setResponseType(ResponseType.SUCCESS);
                 response.setResponseData(value);
             } else {
@@ -138,6 +138,12 @@ public class ConnectionHandler implements Runnable {
     private Message processClientRequest(Message request) throws IOException {
         String type = request.getType();
         Message response = new Message();
+
+        if (request.getClientId() == null){
+            String newClientId = UUID.randomUUID().toString();
+            request.setClientId(newClientId);
+        }
+
         switch (type) {
             case Operation.CREATE:
                 synchronized (broker.queues) {
@@ -158,6 +164,8 @@ public class ConnectionHandler implements Runnable {
                 response.setResponseType(ResponseType.ERROR);
                 response.setResponseMessage("Invalid request type");
         }
+
+        response.setClientId(request.getClientId());
         return response;
     }
 
@@ -305,6 +313,7 @@ public class ConnectionHandler implements Runnable {
         if (receivingTerm > currentTerm) {
            broker.terms.put(queueName, receivingTerm);
            broker.electionHandler.createElectionTimeout(queueName, false);
+           broker.queueAddressMap.put(queueName, request.getLeader());
            response.setMessageType(MessageType.ACK);
            return;
         }

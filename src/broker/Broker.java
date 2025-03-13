@@ -125,7 +125,7 @@ public class Broker {
     }
 
 
-    private void createPingToFollowers(String queueName) {
+    private void createPingToFollowers(String queueName){
         ExecutorService executor = Executors.newFixedThreadPool(replicationBrokers.get(queueName).size());
         AtomicInteger successCount = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(replicationBrokers.get(queueName).size());
