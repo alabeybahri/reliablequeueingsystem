@@ -4,7 +4,6 @@ import common.Address;
 import common.InterBrokerMessage;
 import common.Pair;
 import common.enums.MessageType;
-
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -75,7 +74,7 @@ public class Election {
                         voteGranted.getAndIncrement();
                         }
                 } catch (Exception e) {
-                    System.err.println("Error processing election request to " + address);
+                    System.err.println("[ERROR]: [Broker:"  + broker.port + "] Error processing election request to " + address);
                 } finally {
                 latch.countDown();
                 }
@@ -85,7 +84,7 @@ public class Election {
         try {
             boolean allDone = latch.await(5, TimeUnit.SECONDS);
             if (!allDone) {
-                System.err.println("Election timed out waiting for votes");
+                System.err.println("[INFO]: [Broker:"  + broker.port + "] Election timed out waiting for votes");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -94,19 +93,15 @@ public class Election {
         executor.shutdown();
         int didVotedSelf = votedSelf.get(queueName).contains(electionTerm) ? 1 : 0;
 
-        System.out.println("vote granted count: " + voteGranted.get());
-        System.out.println("did voted self: " + didVotedSelf);
-        System.out.println("totalVotes: " + totalVotes);
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Vote granted count: " + voteGranted.get());
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Did voted self: " + didVotedSelf);
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Total votes: " + totalVotes);
 
         if (voteGranted.get() + didVotedSelf > (totalVotes + 1) / 2) {
             becomeLeader(queueName, electionTerm, otherFollowers);
         } else {
             System.out.println("[INFO]: [Broker: " + broker.port + "] Could not get enough votes to become leader");
         }
-
-    }
-
-    public void cancelElection(String queueName) {
 
     }
 

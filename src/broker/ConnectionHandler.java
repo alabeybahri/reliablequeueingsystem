@@ -200,7 +200,6 @@ public class ConnectionHandler implements Runnable {
     }
 
     private void handleElectionMessage(InterBrokerMessage request, InterBrokerMessage response) {
-        System.out.println("Election message received");
         String queueName = request.getQueueName();
         int voteTerm = request.getTerm();
         int currentTerm = broker.terms.get(queueName);
@@ -217,7 +216,7 @@ public class ConnectionHandler implements Runnable {
         }
 
         response.setVote(vote);
-        System.out.println("Voting : " + vote + ", Vote term: " + voteTerm + " current term: " + currentTerm);
+        System.out.println("[INFO]: [Broker:" + broker.port + "] Voting : " + vote + ", Vote term: " + voteTerm + " current term: " + currentTerm);
     }
 
     private void handleReplicationRequest(InterBrokerMessage request, InterBrokerMessage response) {
@@ -237,7 +236,7 @@ public class ConnectionHandler implements Runnable {
         List<Address> otherFollowers = new ArrayList<>(request.getFollowerAddresses());
         broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
         response.setMessageType(MessageType.ACK);
-        System.out.println("Replicated queue " + queueName);
+        System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName);
         broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
     }
 
@@ -246,7 +245,7 @@ public class ConnectionHandler implements Runnable {
 
         // Check if this is a replication queue
         if (this.broker.replications.get(queueName) == null) {
-            System.out.println("Do not have this replication, cannot append message. Queue: " + queueName);
+            System.out.println("[INFO]: [Broker:" + broker.port + "] Do not have this replication, cannot append message. Queue: " + queueName);
             return;
         }
 
@@ -254,7 +253,7 @@ public class ConnectionHandler implements Runnable {
         broker.replications.get(queueName).add(request.getData());
         response.setMessageType(MessageType.ACK);
 
-        System.out.println("Replicated queue " + queueName +
+        System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName +
                 ": data " + request.getData() +
                 " added to replication");
     }

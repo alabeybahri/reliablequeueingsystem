@@ -79,7 +79,7 @@ public class Broker {
 
     public synchronized void removeClient(String clientId) {
         clientOffsets.remove(clientId);
-        System.out.println("Client disconnected: " + clientId);
+        System.out.println("[INFO]: [Broker:" + port+ "] Client disconnected: " + clientId);
     }
 
     private void startPeriodicPing() {
