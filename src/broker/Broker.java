@@ -16,7 +16,7 @@ public class Broker {
     public Map<String, Map<String, Integer>> clientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
     private MulticastSocket brokerMulticastSocket;
     private InetSocketAddress brokerGroup;
-    public List<Address> knownBrokers = new ArrayList<>();
+    public List<Address> knownBrokers = new CopyOnWriteArrayList<>();
     public Map<String, Address> queueAddressMap = new ConcurrentHashMap<>();
     public Map<String, List<Pair<Address, Integer>>> replicationBrokers = new ConcurrentHashMap<>(); // replication broker addresses of this leader
     public Map<String, Map<String, Integer>> replicationClientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
@@ -421,7 +421,7 @@ public class Broker {
         String requestType = request.getType();
         String queueName = request.getQueueName();
         List<Pair<Address, Integer>> brokersToSend = replicationBrokers.get(queueName);
-        if (brokersToSend == null) { return; } // there is no replication for this queue
+        if (brokersToSend == null || brokersToSend.isEmpty()) { return; } // there is no replication for this queue
 
         int replicationCount = brokersToSend.size();
         ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
