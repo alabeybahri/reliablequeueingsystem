@@ -16,7 +16,7 @@ public class Broker {
     public Map<String, Map<String, Integer>> clientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
     private MulticastSocket brokerMulticastSocket;
     private InetSocketAddress brokerGroup;
-    public List<Address> knownBrokers = new CopyOnWriteArrayList<>();
+    public List<Pair<Address, Integer>> knownBrokers = new ArrayList<>();
     public Map<String, Address> queueAddressMap = new ConcurrentHashMap<>();
     public Map<String, List<Pair<Address, Integer>>> replicationBrokers = new ConcurrentHashMap<>(); // replication broker addresses of this leader
     public Map<String, Map<String, Integer>> replicationClientOffsets = new ConcurrentHashMap<>(); // clientId -> (queueName -> offset)
@@ -122,6 +122,7 @@ public class Broker {
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
         brokerMulticastSocket.send(datagramPacket);
 //        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
+        incrementMissedACKsAndCleanup();
     }
 
 
@@ -303,6 +304,10 @@ public class Broker {
                         queueAddressMap.put(receivedInterBrokerMessage.getQueueName(), receivedInterBrokerMessage.getLeader());
                         sendPingResponse();
                     }
+                    else if (receivedInterBrokerMessage.getMessageType().equals(MessageType.ACK) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
+//                        System.out.println("[INFO]: Received ACK on the discovery message from " + receivedInterBrokerMessage.getPort());
+                        resetMissedACKs(new Address(packet.getAddress().getHostAddress(), receivedInterBrokerMessage.getPort()));
+                    }
                 }
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -310,14 +315,16 @@ public class Broker {
         }).start();
     }
 
-    private void registerBroker(Address address) {
-        String brokerInfo = address.getHost() + ":" + address.getPort();
 
-//        System.out.println("[INFO]: [Broker: " + this.port +  "] Received response from " + brokerInfo);
-        if (!knownBrokers.contains(address)) {
-            knownBrokers.add(address);
-            System.out.println("[INFO]: [Broker: " + this.port +  "] Registered broker " + brokerInfo);
+
+    private void registerBroker(Address address) {
+        for (Pair<Address, Integer> broker : knownBrokers) {
+            if (broker.first.equals(address)) {
+                return;
+            }
         }
+        knownBrokers.add(new Pair<>(address, 0));
+        System.out.println("[INFO]: [Broker: " + port +  "] Registered new broker: " + address.getHost() + ":" + address.getPort());
     }
 
     /**
@@ -332,10 +339,13 @@ public class Broker {
             System.out.println("[ERROR]: Not enough brokers to replicate queue: ");
             return -1;
         }
-        List<Address> shuffledBrokers = new ArrayList<>(knownBrokers);
+        List<Pair<Address, Integer>> shuffledBrokers = new ArrayList<>(knownBrokers);
         Collections.shuffle(shuffledBrokers);
-        List<Address> selectedBrokers = new ArrayList<>(shuffledBrokers.subList(0, replicationCount));
-
+        ArrayList<Pair<Address, Integer>> selectedBrokersPairs = new ArrayList<>(shuffledBrokers.subList(0, replicationCount));
+        List<Address> selectedBrokers = new ArrayList<>();
+        for (Pair<Address, Integer> pair : selectedBrokersPairs) {
+            selectedBrokers.add(pair.first);
+        }
         ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
         AtomicInteger successCount = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(replicationCount);
@@ -604,5 +614,35 @@ public class Broker {
             }
         }
     }
+
+    private void resetMissedACKs(Address address) {
+        for (int i = 0; i < knownBrokers.size(); i++) {
+            Pair<Address, Integer> broker = knownBrokers.get(i);
+            if (broker.first.equals(address)) {
+                knownBrokers.set(i, new Pair<>(address, 0));
+                break;
+            }
+        }
+    }
+
+    private void incrementMissedACKsAndCleanup() {
+        List<Pair<Address, Integer>> updatedBrokers = new ArrayList<>();
+        List<Address> brokersToRemove = new ArrayList<>();
+
+        for (Pair<Address, Integer> broker : knownBrokers) {
+            Address address = broker.first;
+            int missedACKs = broker.second+ 1;
+
+            if (missedACKs >= CONSECUTIVE_FAILURE_LIMIT) {
+                brokersToRemove.add(address);
+                System.out.println("[INFO]: [Broker: " + port + "] Removing unresponsive broker " + address.getHost() + ":" + address.getPort() + " after 3 missed ACKs");
+            } else {
+                updatedBrokers.add(new Pair<>(address, missedACKs));
+            }
+        }
+        knownBrokers = updatedBrokers;
+    }
+
+
 }
 
