@@ -263,7 +263,7 @@ public class Broker {
                                 responseBytes, responseBytes.length, packet.getAddress(), packet.getPort()
                         );
                         multicastSocket.send(responsePacket);
-                        System.out.println("[INFO]: [Broker: " + port +  "] Responded to discovery request with " + response);
+//                        System.out.println("[INFO]: [Broker: " + port +  "] Responded to discovery request with " + response);
                     }
 
                 }

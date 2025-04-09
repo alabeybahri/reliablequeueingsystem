@@ -99,7 +99,7 @@ public class Client {
             if (parts.length == 0) {continue;}
             String command = parts[0];
             Message request = new Message();
-
+            boolean shouldSendRequest = false;
             try {
                 switch (command) {
                     case Operation.CREATE:
@@ -109,7 +109,8 @@ public class Client {
                             System.out.println("Not connected to any broker.");
                             continue;
                         }
-                        processOperation(command, parts, request);
+                        shouldSendRequest = processOperation(command, parts, request);
+                        // Only these operations should send requests
                         break;
                     case Operation.CONNECT:
                         if (parts.length != 2) {
@@ -133,6 +134,9 @@ public class Client {
                     default:
                         System.out.println("Invalid command. Use: create, read, write, connect!");
                         continue;
+                }
+                if (!shouldSendRequest) {
+                    continue;
                 }
                 out.writeObject(request);
                 out.flush();
@@ -162,13 +166,13 @@ public class Client {
         }
     }
 
-    private void processOperation(String command, String[] parts, Message request) {
+    private boolean processOperation(String command, String[] parts, Message request) {
         request.setClientId(id);
         switch (command) {
             case Operation.CREATE:
                 if (parts.length != 2) {
                     System.out.println("Usage: create <queue_name>");
-                    return;
+                    return false;
                 }
                 request.setType(Operation.CREATE);
                 request.setQueueName(parts[1]);
@@ -176,7 +180,7 @@ public class Client {
             case Operation.READ:
                 if (parts.length != 2) {
                     System.out.println("Usage: read <queue_name>");
-                    return;
+                    return false;
                 }
                 request.setType(Operation.READ);
                 request.setQueueName(parts[1]);
@@ -184,13 +188,14 @@ public class Client {
             case Operation.WRITE:
                 if (parts.length != 3) {
                     System.out.println("Usage: write <queue_name> <value>");
-                    return;
+                    return false;
                 }
                 request.setType(Operation.WRITE);
                 request.setQueueName(parts[1]);
                 request.setValue(Integer.parseInt(parts[2]));
                 break;
         }
+        return true;
     }
 
     private void connectToBroker(int index) {
