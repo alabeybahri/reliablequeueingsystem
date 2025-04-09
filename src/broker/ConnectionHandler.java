@@ -108,7 +108,8 @@ public class ConnectionHandler implements Runnable {
 
     private void handleQueueRead(Message request, Message response) {
         if (this.broker.queues.get(request.getQueueName()) == null) {
-            String leaderAddress = this.broker.queueAddressMap.get(request.getQueueName()).toString();
+            Address leaderAddressObject = this.broker.queueAddressMap.get(request.getQueueName());
+            String leaderAddress = leaderAddressObject != null ? leaderAddressObject.toString() : null;
             if (leaderAddress == null) {
                 response.setResponseType(ResponseType.ERROR);
                 response.setResponseMessage("There is no queue");
