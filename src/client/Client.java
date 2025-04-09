@@ -22,7 +22,10 @@ public class Client {
     private static final int DISCOVERY_TIMEOUT = 1000;
     private static final int DISCOVERY_INTERVAL = 500;
 
-    private CopyOnWriteArrayList<Address> brokerCache = new CopyOnWriteArrayList<>();
+    private final TreeSet<Address> brokerCache = new TreeSet<>(
+            Comparator.comparing(Address::getHost)
+                    .thenComparingInt(Address::getPort)
+    );
 
     private AtomicBoolean runDiscovery = new AtomicBoolean(true);
     private AtomicBoolean isConnected = new AtomicBoolean(false);
@@ -61,32 +64,32 @@ public class Client {
         discoveryThread.start();
     }
 
-    private void compareAndLogBrokerChanges(List<Address> previousBrokers, List<Address> currentBrokers, boolean showSymbol) {
-        Set previousBrokersSet = new HashSet<>(previousBrokers);
-        Set currentBrokersSet = new HashSet<>(currentBrokers);
+    private void compareAndLogBrokerChanges(Collection<Address> previousBrokers, Collection<Address> currentBrokers, boolean showSymbol) {
+        Set<Address> previousBrokersSet = new HashSet<>(previousBrokers);
+        Set<Address> currentBrokersSet = new HashSet<>(currentBrokers);
 
         if (previousBrokersSet.equals(currentBrokersSet)) {
             return;
         }
 
         for (Address broker : currentBrokers) {
-            if (!previousBrokers.contains(broker)) {
+            if (!previousBrokersSet.contains(broker)) {
                 System.out.println("New broker joined: " + broker.getHost() + ":" + broker.getPort());
             }
         }
 
         for (Address broker : previousBrokers) {
-            if (!currentBrokers.contains(broker)) {
+            if (!currentBrokersSet.contains(broker)) {
                 System.out.println("Broker left: " + broker.getHost() + ":" + broker.getPort());
             }
         }
 
         System.out.println("Brokers are updated. Found " + currentBrokers.size() + " brokers.");
-        System.out.println("You can connect any of them by specifying the ip and the port or the broker index.");
+        System.out.println("You can connect any of them by specifying the broker index. It starts from 1.");
         System.out.print("Current brokers:" + brokerCache);
         if (showSymbol) {
             System.out.print("\n> ");
-        }else{
+        } else {
             System.out.println();
         }
     }
@@ -110,16 +113,11 @@ public class Client {
                         processOperation(command, parts, request);
                         break;
                     case Operation.CONNECT:
-                        if (parts.length != 3 && parts.length != 2) {
-                            System.out.println("Usage: connect <host> <port>\nconnect <index>");
+                        if (parts.length != 2) {
+                            System.out.println("Usage: connect <index>");
                             continue;
                         }
-                        if (parts.length == 3) {
-                            connectToBroker(parts[1], Integer.parseInt(parts[2]));
-                        }
-                        else {
-                            connectToBroker(Integer.parseInt(parts[1]));
-                        }
+                        connectToBroker(Integer.parseInt(parts[1]));
                         continue;
                     case Operation.DISCONNECT:
                         if (socket == null || !socket.isConnected()) {
@@ -196,10 +194,13 @@ public class Client {
         }
     }
 
-
-    private void connectToBroker(String host, int port) {
+    private void connectToBroker(int index) {
         try {
             if (socket != null && !socket.isClosed()) {socket.close();}
+            Address selectedBroker = getAddressByIndex(index - 1);
+            String host = selectedBroker.getHost();
+            int port = selectedBroker.getPort();
+
             socket = new Socket(host, port);
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
@@ -211,20 +212,17 @@ public class Client {
         }
     }
 
-    private void connectToBroker(int index){
-        try {
-            if (socket != null && !socket.isClosed()) {socket.close();}
-            String host = brokerCache.get(index - 1).getHost();
-            int port = brokerCache.get(index - 1).getPort();
-            socket = new Socket(host, port);
-            out = new ObjectOutputStream(socket.getOutputStream());
-            in = new ObjectInputStream(socket.getInputStream());
-            isConnected.set(true);
-            System.out.println("Connected to broker at " + host + ":" + port);
-        } catch (IOException e) {
-            isConnected.set(false);
-            e.printStackTrace();
+    // Helper method to get Address by index from TreeSet
+    private Address getAddressByIndex(int index) {
+        if (index < 0 || index >= brokerCache.size()) {
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + brokerCache.size());
         }
+
+        Iterator<Address> iterator = brokerCache.iterator();
+        for (int i = 0; i < index; i++) {
+            iterator.next();
+        }
+        return iterator.next();
     }
 
     private void disconnectFromBroker() {
@@ -261,6 +259,7 @@ public class Client {
 
                     if (!brokerCache.contains(newBroker)) {
                         brokerCache.add(newBroker);
+
                         if (initialDiscovery) {
                             System.out.println("Found new broker: " + newBroker.getHost() + ":" + newBroker.getPort());
                         }
