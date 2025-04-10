@@ -246,8 +246,10 @@ public class ConnectionHandler implements Runnable {
             broker.votesGranted.put(queueName, new HashSet<>());
         }
         boolean vote = voteTerm > currentTerm;
+
+        boolean amILeader = broker.queues.get(queueName) != null;
         // if given term, the broker already positive vote do not send positive vote for that term.
-        vote = vote && !broker.votesGranted.get(queueName).contains(voteTerm);
+        vote = vote && !broker.votesGranted.get(queueName).contains(voteTerm) && !amILeader;
 
         if (vote) {
             broker.votesGranted.get(queueName).add(voteTerm);
@@ -272,10 +274,11 @@ public class ConnectionHandler implements Runnable {
         Map<String, Integer> replicationOffset = new HashMap<>();
         broker.replicationClientOffsets.put(queueName, replicationOffset);
         List<Address> otherFollowers = new ArrayList<>(request.getFollowerAddresses());
+        otherFollowers.remove(broker.brokerAddress);
         broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
         response.setMessageType(MessageType.ACK);
         System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName);
-        broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
+        broker.electionHandler.createElectionTimeout(request.getQueueName()); //create scheduler in the pool, start timeout
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -349,7 +352,6 @@ public class ConnectionHandler implements Runnable {
         // leader has changed
         if (receivingTerm > currentTerm) {
            broker.terms.put(queueName, receivingTerm);
-           broker.electionHandler.createElectionTimeout(queueName, false);
            broker.queueAddressMap.put(queueName, request.getLeader());
            response.setMessageType(MessageType.ACK);
            return;
@@ -358,4 +360,5 @@ public class ConnectionHandler implements Runnable {
         broker.terms.put(queueName, receivingTerm);
         response.setMessageType(MessageType.ACK);
     }
+
 }

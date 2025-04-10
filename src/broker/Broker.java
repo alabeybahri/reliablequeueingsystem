@@ -44,6 +44,7 @@ public class Broker {
     private final Object knownBrokersLock = new Object();
     public final Election electionHandler;
 
+
     public Broker(int port) throws IOException {
         this.port = port;
         this.brokerAddress = new Address(LocalIP.getLocalIP().toString(), port);
@@ -178,6 +179,7 @@ public class Broker {
             request.setQueueName(queueName);
             request.setTerm(terms.get(queueName));
             request.setPort(port);
+            request.setLeader(this.brokerAddress);
             List<Address> followers = new ArrayList();
             replicationBrokers.get(queueName).forEach(p ->
                 followers.add(p.first));

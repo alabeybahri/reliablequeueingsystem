@@ -25,6 +25,10 @@ public class Election {
     }
 
     public void resetElectionTimeout(String queueName){
+        if (broker.queueAddressMap.get(queueName)!= null && broker.queueAddressMap.get(queueName).equals(broker.brokerAddress)) {
+            return;
+        }
+
         int electionTimeout = random.nextInt(MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT) + MIN_ELECTION_TIMEOUT;
         ScheduledFuture<?> scheduledFuture;
 
@@ -43,7 +47,6 @@ public class Election {
             }
         }, electionTimeout, TimeUnit.MILLISECONDS);
         scheduledTimeouts.put(queueName, newScheduledFuture);
-
     }
 
     public void cancelElectionTimeout(String queueName){
@@ -59,10 +62,11 @@ public class Election {
 
     private void startElection(String queueName) throws IOException {
         int electionTerm =  broker.terms.get(queueName) + 1;
-        int totalVotes = broker.otherFollowers.get(queueName).size() ;
+        int totalVotes = broker.otherFollowers.get(queueName).size() ; // other followerda kendisi yok
         ArrayList<Address> otherFollowers = new ArrayList<>(broker.otherFollowers.get(queueName));
 
         if (otherFollowers.isEmpty()) {
+
             becomeLeader(queueName, electionTerm, otherFollowers);
             return;
         }
@@ -77,7 +81,7 @@ public class Election {
 
 
         ExecutorService executor = Executors.newFixedThreadPool(otherFollowers.size());
-        AtomicInteger voteGranted = new AtomicInteger();
+        AtomicInteger voteReceived = new AtomicInteger();
         CountDownLatch latch = new CountDownLatch(otherFollowers.size());
 
         System.out.println("[INFO]: [Broker: " + broker.port + "] Starting election for " + queueName + " with term " + electionTerm);
@@ -87,7 +91,7 @@ public class Election {
                 try {
                     InterBrokerMessage response = broker.sendElectionMessage(address, queueName, electionTerm);
                     if (response != null && response.getMessageType() == MessageType.VOTE && response.isVote()) {
-                        voteGranted.getAndIncrement();
+                        voteReceived.getAndIncrement();
                         }
                 } catch (Exception e) {
                     System.err.println("[ERROR]: [Broker:"  + broker.port + "] Error processing election request to " + address);
@@ -109,11 +113,11 @@ public class Election {
         executor.shutdown();
         int didVotedSelf = votedSelf.get(queueName).contains(electionTerm) ? 1 : 0;
 
-        System.out.println("[INFO]: [Broker: " + broker.port + "] Vote granted count: " + voteGranted.get());
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Vote granted count: " + voteReceived.get());
         System.out.println("[INFO]: [Broker: " + broker.port + "] Did voted self: " + didVotedSelf);
         System.out.println("[INFO]: [Broker: " + broker.port + "] Total votes: " + totalVotes);
 
-        if (voteGranted.get() + didVotedSelf > (totalVotes + 1) / 2) {
+        if (voteReceived.get() + didVotedSelf > (totalVotes + 1) / 2) {
             becomeLeader(queueName, electionTerm, otherFollowers);
         } else {
             System.out.println("[INFO]: [Broker: " + broker.port + "] Could not get enough votes to become leader");
@@ -121,11 +125,9 @@ public class Election {
 
     }
 
-    public void createElectionTimeout(String queueName, boolean changePool){
-        if (changePool) {
-            int poolSize = schedulerExecutor.getPoolSize();
-            schedulerExecutor.setCorePoolSize(poolSize + 1);
-        }
+    public void createElectionTimeout(String queueName){
+        int poolSize = schedulerExecutor.getPoolSize();
+        schedulerExecutor.setCorePoolSize(poolSize + 1);
         resetElectionTimeout(queueName);
     }
 
@@ -160,5 +162,4 @@ public class Election {
 
         broker.terms.put(queueName, newTerm);
     }
-
 }
