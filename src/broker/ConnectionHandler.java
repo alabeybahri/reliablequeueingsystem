@@ -51,7 +51,7 @@ public class ConnectionHandler implements Runnable {
                     // Process based on message type
                     if (request instanceof InterBrokerMessage) {
                         InterBrokerMessage brokerRequest = (InterBrokerMessage) request;
-                        System.out.println("[DEBUG]: Processing broker request of type: " + brokerRequest.getMessageType());
+//                        System.out.println("[DEBUG]: Processing broker request of type: " + brokerRequest.getMessageType());
 
                         InterBrokerMessage responseToBroker = processBrokerRequest(brokerRequest);
                         out.reset(); // Reset to clear any cached references
@@ -60,7 +60,7 @@ public class ConnectionHandler implements Runnable {
 
                     } else if (request instanceof Message) {
                         Message clientRequest = (Message) request;
-                        System.out.println("[DEBUG]: Processing client request");
+//                        System.out.println("[DEBUG]: Processing client request");
 
                         Message responseToClient = processClientRequest(clientRequest);
                         out.reset(); // Reset to clear any cached references
@@ -75,7 +75,7 @@ public class ConnectionHandler implements Runnable {
                     // This is normal, just continue the loop
                     continue;
                 } catch (EOFException e) {
-                    System.out.println("[INFO]: Client disconnected: " + connectionAddress);
+//                    System.out.println("[INFO]: Client disconnected: " + connectionAddress);
                     break;
                 } catch (ClassNotFoundException e) {
                     System.err.println("[ERROR]: Unknown object type received: " + e.getMessage());
@@ -131,8 +131,7 @@ public class ConnectionHandler implements Runnable {
                 response.setResponseMessage("There is no queue");
             }
             else {
-                // if there is replication, send message to replications
-                broker.updateReplications(request, request.getClientId());
+                response.setResponseType(ResponseType.SUCCESS);
                 response.setResponseMessage("This broker is not the leader of this queue, leader is: " + leaderAddress);
             }
         }
@@ -276,7 +275,7 @@ public class ConnectionHandler implements Runnable {
         broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
         response.setMessageType(MessageType.ACK);
         System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName);
-        broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
+//        broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -340,7 +339,7 @@ public class ConnectionHandler implements Runnable {
 
     private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
-        broker.electionHandler.resetElectionTimeout(queueName);
+//        broker.electionHandler.resetElectionTimeout(queueName);
         int currentTerm = broker.terms.get(queueName);
         int receivingTerm = request.getTerm();
         List<Address> newOtherFollowerAddresses = request.getFollowerAddresses();
@@ -350,7 +349,7 @@ public class ConnectionHandler implements Runnable {
         // leader has changed
         if (receivingTerm > currentTerm) {
            broker.terms.put(queueName, receivingTerm);
-           broker.electionHandler.createElectionTimeout(queueName, false);
+//           broker.electionHandler.createElectionTimeout(queueName, false);
            broker.queueAddressMap.put(queueName, request.getLeader());
            response.setMessageType(MessageType.ACK);
            return;

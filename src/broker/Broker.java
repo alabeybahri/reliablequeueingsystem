@@ -33,8 +33,7 @@ public class Broker {
     private static final int NUM_ALLOWED_MISSED_PINGS = 3;
     private static final int PING_JITTER = 1000;
     private static final int CONSECUTIVE_FAILURE_LIMIT = 3;
-    private int FOLLOWER_PING_INTERVAL = 1000;
-    private int FAILURE_TIMEOUT;
+    private final int FAILURE_TIMEOUT;
     private int SEND_PING_INTERVAL;
     public Random random;
     // Persistent socket pool for broker-broker connections
@@ -43,7 +42,7 @@ public class Broker {
     private Map<Address, ObjectInputStream> brokerInputStreams = new ConcurrentHashMap<>();
     private final Object brokerSocketLock = new Object();
     private final Object knownBrokersLock = new Object();
-    public final Election electionHandler;
+//    public final Election electionHandler;
 
     public Broker(int port) throws IOException {
         this.port = port;
@@ -51,7 +50,7 @@ public class Broker {
         this.random = new Random(brokerAddress.hashCode());
         FAILURE_TIMEOUT = random.nextInt(MAX_FAILURE_TIMEOUT - MIN_FAILURE_TIMEOUT) + MIN_FAILURE_TIMEOUT;
         SEND_PING_INTERVAL = FAILURE_TIMEOUT * NUM_ALLOWED_MISSED_PINGS;
-        electionHandler = new Election(this);
+//        electionHandler = new Election(this);
         startMulticastListener();
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
@@ -65,11 +64,6 @@ public class Broker {
             while (true) {
                 Socket socket = serverSocket.accept();
                 String clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
-                if (knownBrokers.contains(new Address(socket.getInetAddress().getHostAddress(), socket.getPort()))) {
-                    System.out.println("[INFO]: [Broker: " + port +  "] Broker connected: " + clientId);
-                }else {
-                    System.out.println("[INFO]: [Broker: " + port +  "] Client connected: " + clientId);
-                }
                 new Thread(new ConnectionHandler(socket, clientId, this)).start();
 
             }
@@ -106,7 +100,7 @@ public class Broker {
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
-        }, 0, FOLLOWER_PING_INTERVAL, TimeUnit.MILLISECONDS);
+        }, 0, SEND_PING_INTERVAL * 3, TimeUnit.MILLISECONDS);
 
     }
 
@@ -163,7 +157,7 @@ public class Broker {
         }
 
         if (successCount.get()  == replicationBrokers.get(queueName).size() && !replicationBrokers.get(queueName).isEmpty()) {
-            System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
+//            System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
         } else if (!replicationBrokers.get(queueName).isEmpty()) {
             System.out.println("[INFO]: [Broker: " + port +  "] Not received all the ACKs.");
         }
@@ -194,7 +188,7 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName) + ": " + (response.getMessageType() == MessageType.ACK));
+//            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName) + ": " + (response.getMessageType() == MessageType.ACK));
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
