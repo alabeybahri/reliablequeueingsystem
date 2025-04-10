@@ -118,7 +118,7 @@ public class ConnectionHandler implements Runnable {
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Successfully added a queue with this name");
             broker.terms.put(request.getQueueName(), 1);
-            broker.updateQueueAddressMap(request.getQueueName(), MessageType.NEW_QUEUE);
+            broker.updateQueueAddressMap(request.getQueueName(), MessageType.NEW_QUEUE, 1);
             broker.startPeriodicPingFollowers(request.getQueueName());
         }
     }
@@ -239,24 +239,35 @@ public class ConnectionHandler implements Runnable {
 
     private void handleElectionMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
-        int voteTerm = request.getTerm();
+        int requestTerm = request.getTerm();
+
+        // Initialize term for queue if not present
+        if (!broker.terms.containsKey(queueName)) {
+            broker.terms.put(queueName, 0);
+        }
         int currentTerm = broker.terms.get(queueName);
+
+        // Vote granted if the candidate's term is >= our term
+        if (requestTerm > currentTerm) {
+            broker.terms.put(queueName, requestTerm);
+            response.setMessageType(MessageType.VOTE);
+            response.setVote(true);
+
+            // Reset our timeout since we've voted for a new leader
+            broker.electionHandler.cancelElectionTimeout(queueName);
+            broker.electionHandler.resetElectionTimeout(queueName);
+
+            // Record that we voted in this term
+            broker.votesGranted.computeIfAbsent(queueName, k -> new HashSet<>()).add(requestTerm);
+
+            System.out.println("[INFO]: [Broker: " + broker.port + "] Vote granted for " + queueName + " with term " + requestTerm);
+            return;
+        }
+
+        // If we've already voted for this term or our term is higher, reject
         response.setMessageType(MessageType.VOTE);
-        if (!broker.votesGranted.containsKey(queueName)) {
-            broker.votesGranted.put(queueName, new HashSet<>());
-        }
-        boolean vote = voteTerm > currentTerm;
-
-        boolean amILeader = broker.queues.get(queueName) != null;
-        // if given term, the broker already positive vote do not send positive vote for that term.
-        vote = vote && !broker.votesGranted.get(queueName).contains(voteTerm) && !amILeader;
-
-        if (vote) {
-            broker.votesGranted.get(queueName).add(voteTerm);
-        }
-
-        response.setVote(vote);
-        System.out.println("[INFO]: [Broker:" + broker.port + "] Voting : " + vote + ", Vote term: " + voteTerm + " current term: " + currentTerm);
+        response.setVote(false);
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Vote denied for " + queueName + " with term " + requestTerm + ", our term: " + currentTerm);
     }
 
     private void handleReplicationRequest(InterBrokerMessage request, InterBrokerMessage response) {
@@ -340,24 +351,52 @@ public class ConnectionHandler implements Runnable {
         }
     }
 
+//    private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
+//        String queueName = request.getQueueName();
+//        broker.electionHandler.resetElectionTimeout(queueName);
+//        int currentTerm = broker.terms.get(queueName);
+//        int receivingTerm = request.getTerm();
+//        List<Address> newOtherFollowerAddresses = request.getFollowerAddresses();
+//        newOtherFollowerAddresses.remove(broker.brokerAddress);
+//        broker.otherFollowers.put(queueName, newOtherFollowerAddresses);
+//
+//        // leader has changed
+//        if (receivingTerm > currentTerm) {
+//           broker.terms.put(queueName, receivingTerm);
+//           broker.queueAddressMap.put(queueName, request.getLeader());
+//           response.setMessageType(MessageType.ACK);
+//           return;
+//        }
+//
+//
+//        response.setMessageType(MessageType.ACK);
+//    }
+
     private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
-        broker.electionHandler.resetElectionTimeout(queueName);
-        int currentTerm = broker.terms.get(queueName);
+        int currentTerm = 0;
+        if (broker.terms.containsKey(queueName)) {
+            currentTerm = broker.terms.get(queueName);
+        }
         int receivingTerm = request.getTerm();
         List<Address> newOtherFollowerAddresses = request.getFollowerAddresses();
         newOtherFollowerAddresses.remove(broker.brokerAddress);
         broker.otherFollowers.put(queueName, newOtherFollowerAddresses);
 
-        // leader has changed
-        if (receivingTerm > currentTerm) {
-           broker.terms.put(queueName, receivingTerm);
-           broker.queueAddressMap.put(queueName, request.getLeader());
-           response.setMessageType(MessageType.ACK);
-           return;
+        // If we receive a ping from a valid leader with equal or higher term
+        if (receivingTerm >= currentTerm) {
+            // Update our term if necessary
+            broker.terms.put(queueName, receivingTerm);
+            // Update our leader information
+            broker.queueAddressMap.put(queueName, request.getLeader());
+            // Reset election timeout since we have a valid leader
+            broker.electionHandler.cancelElectionTimeout(queueName);
+            broker.electionHandler.resetElectionTimeout(queueName);
+            response.setMessageType(MessageType.ACK);
+            return;
         }
 
-        broker.terms.put(queueName, receivingTerm);
+        // If we receive a ping with lower term, we still ACK it but don't update our state
         response.setMessageType(MessageType.ACK);
     }
 

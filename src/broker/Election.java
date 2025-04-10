@@ -32,7 +32,6 @@ public class Election {
         int electionTimeout = random.nextInt(MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT) + MIN_ELECTION_TIMEOUT;
         ScheduledFuture<?> scheduledFuture;
 
-        // if there is a scheduled timeout for this queue, cancel it
         if (scheduledTimeouts.containsKey(queueName)) {
             scheduledFuture = scheduledTimeouts.get(queueName);
             scheduledFuture.cancel(true);
@@ -59,14 +58,12 @@ public class Election {
         }
     }
 
-
     private void startElection(String queueName) throws IOException {
         int electionTerm =  broker.terms.get(queueName) + 1;
-        int totalVotes = broker.otherFollowers.get(queueName).size() ; // other followerda kendisi yok
+        int totalVotes = broker.otherFollowers.get(queueName).size();
         ArrayList<Address> otherFollowers = new ArrayList<>(broker.otherFollowers.get(queueName));
 
         if (otherFollowers.isEmpty()) {
-
             becomeLeader(queueName, electionTerm, otherFollowers);
             return;
         }
@@ -78,7 +75,6 @@ public class Election {
             broker.votesGranted.get(queueName).add(electionTerm);
             votedSelf.get(queueName).add(electionTerm);
         }
-
 
         ExecutorService executor = Executors.newFixedThreadPool(otherFollowers.size());
         AtomicInteger voteReceived = new AtomicInteger();
@@ -92,11 +88,11 @@ public class Election {
                     InterBrokerMessage response = broker.sendElectionMessage(address, queueName, electionTerm);
                     if (response != null && response.getMessageType() == MessageType.VOTE && response.isVote()) {
                         voteReceived.getAndIncrement();
-                        }
+                    }
                 } catch (Exception e) {
                     System.err.println("[ERROR]: [Broker:"  + broker.port + "] Error processing election request to " + address);
                 } finally {
-                latch.countDown();
+                    latch.countDown();
                 }
             });
         }
@@ -122,7 +118,6 @@ public class Election {
         } else {
             System.out.println("[INFO]: [Broker: " + broker.port + "] Could not get enough votes to become leader");
         }
-
     }
 
     public void createElectionTimeout(String queueName){
@@ -135,7 +130,7 @@ public class Election {
         System.out.println("[INFO]: [Broker: " + broker.port +  "] New leader for " + queueName + " with term " + newTerm);
         cancelElectionTimeout(queueName);
         broker.queueAddressMap.replace(queueName, this.broker.brokerAddress);
-        broker.updateQueueAddressMap(queueName, MessageType.LEADER_ANNOUNCEMENT);
+        broker.updateQueueAddressMap(queueName, MessageType.LEADER_ANNOUNCEMENT, newTerm);
         transferData(queueName, newTerm, otherFollowers);
         broker.startPeriodicPingFollowers(queueName);
     }
@@ -158,7 +153,6 @@ public class Election {
             Pair<Address, Integer> replicationPair = new Pair<>(address, 0);
             broker.replicationBrokers.computeIfAbsent(queueName, k -> new ArrayList<>()).add(replicationPair);
         });
-        broker.otherFollowers.remove(queueName);
 
         broker.terms.put(queueName, newTerm);
     }
