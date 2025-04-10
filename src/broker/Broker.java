@@ -42,7 +42,7 @@ public class Broker {
     private Map<Address, ObjectInputStream> brokerInputStreams = new ConcurrentHashMap<>();
     private final Object brokerSocketLock = new Object();
     private final Object knownBrokersLock = new Object();
-//    public final Election electionHandler;
+    public final Election electionHandler;
 
     public Broker(int port) throws IOException {
         this.port = port;
@@ -50,7 +50,7 @@ public class Broker {
         this.random = new Random(brokerAddress.hashCode());
         FAILURE_TIMEOUT = random.nextInt(MAX_FAILURE_TIMEOUT - MIN_FAILURE_TIMEOUT) + MIN_FAILURE_TIMEOUT;
         SEND_PING_INTERVAL = FAILURE_TIMEOUT * NUM_ALLOWED_MISSED_PINGS;
-//        electionHandler = new Election(this);
+        electionHandler = new Election(this);
         startMulticastListener();
         createBrokerMulticastSocket();
         startBrokerMulticastListener();
@@ -215,11 +215,12 @@ public class Broker {
      * Sends datagram packet to multicast group to notify newly created queue.
      * @param queueName newly created queue name.
      */
-    public void updateQueueAddressMap(String queueName) throws IOException {
+    public void updateQueueAddressMap(String queueName, MessageType messageType) throws IOException {
         InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
         interBrokerMessage.setQueueName(queueName);
         interBrokerMessage.setLeader(brokerAddress);
-        interBrokerMessage.setMessageType(MessageType.NEW_QUEUE);
+        interBrokerMessage.setPort(port);
+        interBrokerMessage.setMessageType(messageType);
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
@@ -302,6 +303,10 @@ public class Broker {
                     else if (receivedInterBrokerMessage.getMessageType().equals(MessageType.ACK) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
 //                        System.out.println("[INFO]: Received ACK on the discovery message from " + receivedInterBrokerMessage.getPort());
                         resetMissedACKs(new Address(packet.getAddress().getHostAddress(), receivedInterBrokerMessage.getPort()));
+                    }
+                    else if(receivedInterBrokerMessage.getMessageType().equals(MessageType.LEADER_ANNOUNCEMENT) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))){
+                        queueAddressMap.put(receivedInterBrokerMessage.getQueueName(), receivedInterBrokerMessage.getLeader());
+                        System.out.println("[INFO]: New leader elected for queue " + receivedInterBrokerMessage.getQueueName());
                     }
                 }
             } catch (IOException e) {

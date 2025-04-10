@@ -118,7 +118,7 @@ public class ConnectionHandler implements Runnable {
             response.setResponseType(ResponseType.SUCCESS);
             response.setResponseMessage("Successfully added a queue with this name");
             broker.terms.put(request.getQueueName(), 1);
-            broker.updateQueueAddressMap(request.getQueueName());
+            broker.updateQueueAddressMap(request.getQueueName(), MessageType.NEW_QUEUE);
             broker.startPeriodicPingFollowers(request.getQueueName());
         }
     }
@@ -275,7 +275,7 @@ public class ConnectionHandler implements Runnable {
         broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
         response.setMessageType(MessageType.ACK);
         System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName);
-//        broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
+        broker.electionHandler.createElectionTimeout(request.getQueueName(), true); //create scheduler in the pool, start timeout
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -339,7 +339,7 @@ public class ConnectionHandler implements Runnable {
 
     private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
-//        broker.electionHandler.resetElectionTimeout(queueName);
+        broker.electionHandler.resetElectionTimeout(queueName);
         int currentTerm = broker.terms.get(queueName);
         int receivingTerm = request.getTerm();
         List<Address> newOtherFollowerAddresses = request.getFollowerAddresses();
@@ -349,7 +349,7 @@ public class ConnectionHandler implements Runnable {
         // leader has changed
         if (receivingTerm > currentTerm) {
            broker.terms.put(queueName, receivingTerm);
-//           broker.electionHandler.createElectionTimeout(queueName, false);
+           broker.electionHandler.createElectionTimeout(queueName, false);
            broker.queueAddressMap.put(queueName, request.getLeader());
            response.setMessageType(MessageType.ACK);
            return;

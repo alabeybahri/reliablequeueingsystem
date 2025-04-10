@@ -4,13 +4,15 @@ import common.Address;
 import common.InterBrokerMessage;
 import common.Pair;
 import common.enums.MessageType;
+
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Election {
-    private static final int MIN_ELECTION_TIMEOUT = 5000;
-    private static final int MAX_ELECTION_TIMEOUT = 10000;
+    private static final int MIN_ELECTION_TIMEOUT = 10000;
+    private static final int MAX_ELECTION_TIMEOUT = 20000;
     private final Broker broker;
     private final Random random;
     private ScheduledThreadPoolExecutor schedulerExecutor;
@@ -34,14 +36,28 @@ public class Election {
         }
 
         ScheduledFuture<?> newScheduledFuture = schedulerExecutor.schedule(()-> {
-            startElection(queueName);
+            try {
+                startElection(queueName);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         }, electionTimeout, TimeUnit.MILLISECONDS);
         scheduledTimeouts.put(queueName, newScheduledFuture);
 
     }
 
+    public void cancelElectionTimeout(String queueName){
+        ScheduledFuture<?> scheduledFuture;
 
-    private void startElection(String queueName) {
+        if (scheduledTimeouts.containsKey(queueName)) {
+            scheduledFuture = scheduledTimeouts.get(queueName);
+            scheduledFuture.cancel(true);
+            scheduledTimeouts.remove(queueName);
+        }
+    }
+
+
+    private void startElection(String queueName) throws IOException {
         int electionTerm =  broker.terms.get(queueName) + 1;
         int totalVotes = broker.otherFollowers.get(queueName).size() ;
         ArrayList<Address> otherFollowers = new ArrayList<>(broker.otherFollowers.get(queueName));
@@ -113,8 +129,11 @@ public class Election {
         resetElectionTimeout(queueName);
     }
 
-    private void becomeLeader(String queueName, int newTerm, List<Address> otherFollowers) {
+    private void becomeLeader(String queueName, int newTerm, List<Address> otherFollowers) throws IOException {
         System.out.println("[INFO]: [Broker: " + broker.port +  "] New leader for " + queueName + " with term " + newTerm);
+        cancelElectionTimeout(queueName);
+        broker.queueAddressMap.replace(queueName, this.broker.brokerAddress);
+        broker.updateQueueAddressMap(queueName, MessageType.LEADER_ANNOUNCEMENT);
         transferData(queueName, newTerm, otherFollowers);
         broker.startPeriodicPingFollowers(queueName);
     }
