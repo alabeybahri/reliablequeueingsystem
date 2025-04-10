@@ -9,8 +9,8 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Election {
-    private static final int MIN_ELECTION_TIMEOUT = 2500;
-    private static final int MAX_ELECTION_TIMEOUT = 7500;
+    private static final int MIN_ELECTION_TIMEOUT = 5000;
+    private static final int MAX_ELECTION_TIMEOUT = 10000;
     private final Broker broker;
     private final Random random;
     private ScheduledThreadPoolExecutor schedulerExecutor;

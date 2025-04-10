@@ -28,8 +28,8 @@ public class Broker {
     private static final int CLIENT_MULTICAST_PORT = 5010;
     private static final String BROKER_MULTICAST_ADDRESS = "239.255.0.1";
     private static final int BROKER_MULTICAST_PORT = 5020;
-    private static final int MIN_FAILURE_TIMEOUT = 100;
-    private static final int MAX_FAILURE_TIMEOUT = 200;
+    private static final int MIN_FAILURE_TIMEOUT = 1000;
+    private static final int MAX_FAILURE_TIMEOUT = 2000;
     private static final int NUM_ALLOWED_MISSED_PINGS = 3;
     private static final int PING_JITTER = 1000;
     private static final int CONSECUTIVE_FAILURE_LIMIT = 3;
@@ -42,6 +42,7 @@ public class Broker {
     private Map<Address, ObjectOutputStream> brokerOutputStreams = new ConcurrentHashMap<>();
     private Map<Address, ObjectInputStream> brokerInputStreams = new ConcurrentHashMap<>();
     private final Object brokerSocketLock = new Object();
+    private final Object knownBrokersLock = new Object();
     public final Election electionHandler;
 
     public Broker(int port) throws IOException {
@@ -49,7 +50,7 @@ public class Broker {
         this.brokerAddress = new Address(LocalIP.getLocalIP().toString(), port);
         this.random = new Random(brokerAddress.hashCode());
         FAILURE_TIMEOUT = random.nextInt(MAX_FAILURE_TIMEOUT - MIN_FAILURE_TIMEOUT) + MIN_FAILURE_TIMEOUT;
-        SEND_PING_INTERVAL = (int) (FAILURE_TIMEOUT * 0.75 / NUM_ALLOWED_MISSED_PINGS);
+        SEND_PING_INTERVAL = FAILURE_TIMEOUT * NUM_ALLOWED_MISSED_PINGS;
         electionHandler = new Election(this);
         startMulticastListener();
         createBrokerMulticastSocket();
@@ -327,19 +328,19 @@ public class Broker {
         System.out.println("[INFO]: [Broker: " + port +  "] Registered new broker: " + address.getHost() + ":" + address.getPort());
     }
 
-    /**
-     * Selects brokers to replicate its queue. Sends them unicast request to create the queue replication.
-     * At this point, it is known that queue is not created before.
-     * @param queueName Queue that will be replicated.
-     * @return Number of successfully created replicas excluding leader.
-     */
+
     public int createReplication(String queueName){
-        int replicationCount = knownBrokers.size(); // (knownBrokers.size() + 1) / 2;
-        if (replicationCount < 1) {
-            System.out.println("[ERROR]: Not enough brokers to replicate queue: ");
-            return -1;
+        List<Pair<Address, Integer>> shuffledBrokers;
+        int replicationCount;
+        synchronized(knownBrokersLock) {
+            replicationCount = knownBrokers.size(); // (knownBrokers.size() + 1) / 2;
+            if (replicationCount < 1) {
+                System.out.println("[INFO]: Not enough brokers to replicate queue: " + queueName);
+                return -1;
+            }
+             shuffledBrokers = new ArrayList<>(knownBrokers);
         }
-        List<Pair<Address, Integer>> shuffledBrokers = new ArrayList<>(knownBrokers);
+
         Collections.shuffle(shuffledBrokers);
         ArrayList<Pair<Address, Integer>> selectedBrokersPairs = new ArrayList<>(shuffledBrokers.subList(0, replicationCount));
         List<Address> selectedBrokers = new ArrayList<>();
@@ -616,11 +617,14 @@ public class Broker {
     }
 
     private void resetMissedACKs(Address address) {
-        for (int i = 0; i < knownBrokers.size(); i++) {
-            Pair<Address, Integer> broker = knownBrokers.get(i);
-            if (broker.first.equals(address)) {
-                knownBrokers.set(i, new Pair<>(address, 0));
-                break;
+
+        synchronized (knownBrokersLock) {
+            for (int i = 0; i < knownBrokers.size(); i++) {
+                Pair<Address, Integer> broker = knownBrokers.get(i);
+                if (broker.first.equals(address)) {
+                    knownBrokers.set(i, new Pair<>(address, 0));
+                    break;
+                }
             }
         }
     }
@@ -629,18 +633,20 @@ public class Broker {
         List<Pair<Address, Integer>> updatedBrokers = new ArrayList<>();
         List<Address> brokersToRemove = new ArrayList<>();
 
-        for (Pair<Address, Integer> broker : knownBrokers) {
-            Address address = broker.first;
-            int missedACKs = broker.second+ 1;
+        synchronized (knownBrokersLock) {
+            for (Pair<Address, Integer> broker : knownBrokers) {
+                Address address = broker.first;
+                int missedACKs = broker.second + 1;
 
-            if (missedACKs >= CONSECUTIVE_FAILURE_LIMIT) {
-                brokersToRemove.add(address);
-                System.out.println("[INFO]: [Broker: " + port + "] Removing unresponsive broker " + address.getHost() + ":" + address.getPort() + " after 3 missed ACKs");
-            } else {
-                updatedBrokers.add(new Pair<>(address, missedACKs));
+                if (missedACKs >= CONSECUTIVE_FAILURE_LIMIT) {
+                    brokersToRemove.add(address);
+                    System.out.println("[INFO]: [Broker: " + port + "] Removing unresponsive broker " + address.getHost() + ":" + address.getPort() + " after 3 missed ACKs");
+                } else {
+                    updatedBrokers.add(new Pair<>(address, missedACKs));
+                }
             }
+            knownBrokers = updatedBrokers;
         }
-        knownBrokers = updatedBrokers;
     }
 
 
