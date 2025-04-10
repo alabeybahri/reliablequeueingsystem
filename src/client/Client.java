@@ -192,6 +192,12 @@ public class Client {
                 }
                 request.setType(Operation.WRITE);
                 request.setQueueName(parts[1]);
+                try {
+                    Integer.parseInt(parts[2]);
+                } catch (NumberFormatException e) {
+                    System.out.println("Value must be an integer.");
+                    return false;
+                }
                 request.setValue(Integer.parseInt(parts[2]));
                 break;
         }
