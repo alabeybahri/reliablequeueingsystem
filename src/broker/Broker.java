@@ -253,7 +253,7 @@ public class Broker {
 
 
                 while (true) {
-                    byte[] buffer = new byte[1024];
+                    byte[] buffer = new byte[4096];
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     multicastSocket.receive(packet);
                     String message = new String(packet.getData(), 0, packet.getLength());
@@ -293,7 +293,7 @@ public class Broker {
             try {
                 System.out.println("[INFO]: [Broker: " + port +  "] Listening other brokers on " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
                 while (true) {
-                    byte[] buffer = new byte[1024];
+                    byte[] buffer = new byte[4096];
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     brokerMulticastSocket.receive(packet);
                     InterBrokerMessage receivedInterBrokerMessage = InterBrokerMessage.deserializeFromBytes(packet.getData());
@@ -387,14 +387,17 @@ public class Broker {
             ObjectOutputStream out = brokerOutputStreams.get(broker);
             ObjectInputStream in = brokerInputStreams.get(broker);
 
+            // Create a copy of the followers list for this request
+            List<Address> followersForThisRequest = new ArrayList<>(allFollowers);
+            // Remove the current broker from the copied list
+            followersForThisRequest.remove(broker);
+
             InterBrokerMessage request = new InterBrokerMessage();
             request.setMessageType(MessageType.REPLICATION);
             request.setQueueName(queueName);
-            allFollowers.remove(broker);
-            request.setFollowerAddresses(allFollowers);
+            request.setFollowerAddresses(followersForThisRequest);
             out.writeObject(request);
             out.flush();
-            allFollowers.add(broker);
 
             socket.setSoTimeout(5000); // 5 seconds for ACK
 

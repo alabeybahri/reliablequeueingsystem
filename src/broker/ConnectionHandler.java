@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.util.*;
 
 public class ConnectionHandler implements Runnable {
@@ -35,25 +36,62 @@ public class ConnectionHandler implements Runnable {
     @Override
     public void run() {
         try {
-            while (true) {
-                Object request = in.readObject();
-                if (request == null) break;
-                if (request instanceof InterBrokerMessage){
-                    InterBrokerMessage responseToBroker = processBrokerRequest((InterBrokerMessage) request);
-                    out.writeObject(responseToBroker);
-                    out.flush();
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    // Set a timeout to prevent blocking forever
+                    socket.setSoTimeout(30000); // 30 seconds timeout
 
-                } else if (request instanceof Message){
-                    Message responseToClient = processClientRequest((Message) request);
-                    out.writeObject(responseToClient);
-                    out.flush();
+                    // Read the next object
+                    Object request = in.readObject();
+                    if (request == null) {
+                        System.out.println("[INFO]: Received null request, closing connection");
+                        break;
+                    }
+
+                    // Process based on message type
+                    if (request instanceof InterBrokerMessage) {
+                        InterBrokerMessage brokerRequest = (InterBrokerMessage) request;
+                        System.out.println("[DEBUG]: Processing broker request of type: " + brokerRequest.getMessageType());
+
+                        InterBrokerMessage responseToBroker = processBrokerRequest(brokerRequest);
+                        out.reset(); // Reset to clear any cached references
+                        out.writeObject(responseToBroker);
+                        out.flush();
+
+                    } else if (request instanceof Message) {
+                        Message clientRequest = (Message) request;
+                        System.out.println("[DEBUG]: Processing client request");
+
+                        Message responseToClient = processClientRequest(clientRequest);
+                        out.reset(); // Reset to clear any cached references
+                        out.writeObject(responseToClient);
+                        out.flush();
+
+                    } else {
+                        System.out.println("[WARNING]: Received unknown request type: " +
+                                (request != null ? request.getClass().getName() : "null"));
+                    }
+                } catch (SocketTimeoutException e) {
+                    // This is normal, just continue the loop
+                    continue;
+                } catch (EOFException e) {
+                    System.out.println("[INFO]: Client disconnected: " + connectionAddress);
+                    break;
+                } catch (ClassNotFoundException e) {
+                    System.err.println("[ERROR]: Unknown object type received: " + e.getMessage());
+                    // Continue and try to read the next object
+                } catch (IOException e) {
+                    System.err.println("[ERROR]: IO error while processing request: " + e.getMessage());
+                    // For IO errors, it's often better to close the connection
+                    break;
+                } catch (Exception e) {
+                    System.err.println("[ERROR]: Unexpected error processing request: " + e.getMessage());
+                    e.printStackTrace();
+                    break;
                 }
             }
-        } catch (EOFException e) {
-            // Client disconnected
-        } catch (IOException | ClassNotFoundException e) {
-            e.printStackTrace();
         } finally {
+            System.out.println("[INFO]: Connection handler exiting for: " + connectionAddress);
             broker.removeClient(connectionAddress);
             closeResources();
         }
@@ -63,9 +101,9 @@ public class ConnectionHandler implements Runnable {
         try {
             if (in != null) in.close();
             if (out != null) out.close();
-            if (socket != null) socket.close();
+            if (socket != null && !socket.isClosed()) socket.close();
         } catch (IOException e) {
-            System.out.println("Error closing resources");
+            System.err.println("[ERROR]: Error closing resources: " + e.getMessage());
         }
     }
 
