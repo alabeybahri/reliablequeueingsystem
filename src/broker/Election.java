@@ -47,8 +47,8 @@ public class Election {
         }, electionTimeout, TimeUnit.MILLISECONDS);
 
         scheduledTimeouts.put(queueName, newScheduledFuture);
-        System.out.println("[INFO]: [Broker: " + broker.port + "] Set election timeout for " +
-                queueName + " to " + electionTimeout + "ms");
+//        System.out.println("[INFO]: [Broker: " + broker.port + "] Set election timeout for " +
+//                queueName + " to " + electionTimeout + "ms");
     }
 
     public void cancelElectionTimeout(String queueName){
