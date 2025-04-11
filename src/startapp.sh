@@ -65,7 +65,7 @@ do
     osascript <<EOF
 tell application "Terminal"
     activate
-    set newTab to do script "cd $(pwd); read"
+    set newTab to do script "cd $(pwd); echo 'Starting broker on port $PORT'; java -cp out broker.BrokerApplication $PORT; echo 'Broker on port $PORT terminated. Press Enter to close this window.'; read"
     delay 0.3
     set bounds of front window to {$POS_X, $POS_Y, $WIN_RIGHT, $WIN_BOTTOM}
 end tell
