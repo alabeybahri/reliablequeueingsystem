@@ -24,28 +24,31 @@ public class Election {
         this.schedulerExecutor = new ScheduledThreadPoolExecutor(2);
     }
 
-    public void resetElectionTimeout(String queueName){
-        if (broker.queueAddressMap.get(queueName)!= null && broker.queueAddressMap.get(queueName).equals(broker.brokerAddress)) {
+    public void resetElectionTimeout(String queueName) {
+        if (broker.queueAddressMap.containsKey(queueName) &&
+                broker.queueAddressMap.get(queueName) != null &&
+                broker.queueAddressMap.get(queueName).equals(broker.brokerAddress)) {
+            cancelElectionTimeout(queueName);
             return;
         }
 
         int electionTimeout = random.nextInt(MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT) + MIN_ELECTION_TIMEOUT;
-        ScheduledFuture<?> scheduledFuture;
 
-        if (scheduledTimeouts.containsKey(queueName)) {
-            scheduledFuture = scheduledTimeouts.get(queueName);
-            scheduledFuture.cancel(true);
-            scheduledTimeouts.remove(queueName);
-        }
+        cancelElectionTimeout(queueName);
 
-        ScheduledFuture<?> newScheduledFuture = schedulerExecutor.schedule(()-> {
+        ScheduledFuture<?> newScheduledFuture = schedulerExecutor.schedule(() -> {
             try {
-                startElection(queueName);
+                if (!broker.brokerAddress.equals(broker.queueAddressMap.getOrDefault(queueName, null))) {
+                    startElection(queueName);
+                }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         }, electionTimeout, TimeUnit.MILLISECONDS);
+
         scheduledTimeouts.put(queueName, newScheduledFuture);
+        System.out.println("[INFO]: [Broker: " + broker.port + "] Set election timeout for " +
+                queueName + " to " + electionTimeout + "ms");
     }
 
     public void cancelElectionTimeout(String queueName){
@@ -54,11 +57,31 @@ public class Election {
         if (scheduledTimeouts.containsKey(queueName)) {
             scheduledFuture = scheduledTimeouts.get(queueName);
             scheduledFuture.cancel(true);
-            scheduledTimeouts.remove(queueName);
         }
     }
 
     private void startElection(String queueName) throws IOException {
+        if (broker.queueAddressMap.containsKey(queueName) &&
+                broker.queueAddressMap.get(queueName) != null &&
+                broker.queueAddressMap.get(queueName).equals(broker.brokerAddress)) {
+            System.out.println("[INFO]: [Broker: " + broker.port + "] Already the leader for " +
+                    queueName + ", skipping election");
+            return;
+        }
+
+        String electionKey = queueName + "-lastElection";
+        Long lastElectionTime = (Long) broker.getStateProperty(electionKey, 0L);
+        long currentTime = System.currentTimeMillis();
+
+        if (currentTime - lastElectionTime < MIN_ELECTION_TIMEOUT) {
+            System.out.println("[INFO]: [Broker: " + broker.port + "] Election for " + queueName +
+                    " attempted too soon, delaying");
+            resetElectionTimeout(queueName);
+            return;
+        }
+
+        broker.setStateProperty(electionKey, currentTime);
+
         int electionTerm =  broker.terms.get(queueName) + 1;
         int totalVotes = broker.otherFollowers.get(queueName).size();
         ArrayList<Address> otherFollowers = new ArrayList<>(broker.otherFollowers.get(queueName));

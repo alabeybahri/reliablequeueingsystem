@@ -43,7 +43,15 @@ public class Broker {
     private final Object brokerSocketLock = new Object();
     private final Object knownBrokersLock = new Object();
     public final Election electionHandler;
+    private final ConcurrentHashMap<String, Object> stateStore = new ConcurrentHashMap<>();
 
+    public Object getStateProperty(String key, Object defaultValue) {
+        return stateStore.getOrDefault(key, defaultValue);
+    }
+
+    public void setStateProperty(String key, Object value) {
+        stateStore.put(key, value);
+    }
 
     public Broker(int port) throws IOException {
         this.port = port;
@@ -101,7 +109,7 @@ public class Broker {
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
-        }, 0, SEND_PING_INTERVAL * 3, TimeUnit.MILLISECONDS);
+        }, 0, SEND_PING_INTERVAL / 3, TimeUnit.MILLISECONDS);
 
     }
 
@@ -306,17 +314,37 @@ public class Broker {
                     else if (receivedInterBrokerMessage.getMessageType().equals(MessageType.ACK) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))) {
                         resetMissedACKs(new Address(packet.getAddress().getHostAddress(), receivedInterBrokerMessage.getPort()));
                     }
-                    else if(receivedInterBrokerMessage.getMessageType().equals(MessageType.LEADER_ANNOUNCEMENT) && !((packet.getAddress().equals(LocalIP.getLocalIP())) && (receivedInterBrokerMessage.getPort()) == (port))){
+                    else if(receivedInterBrokerMessage.getMessageType().equals(MessageType.LEADER_ANNOUNCEMENT)) {
                         String queueName = receivedInterBrokerMessage.getQueueName();
                         int receivedTerm = receivedInterBrokerMessage.getTerm();
+                        Address newLeader = receivedInterBrokerMessage.getLeader();
 
-                        // Only update if the term is higher than our current term
                         if (!terms.containsKey(queueName) || receivedTerm > terms.get(queueName)) {
-                            queueAddressMap.put(queueName, receivedInterBrokerMessage.getLeader());
+                            System.out.println("[INFO]: [Broker: " + port + "] Accepting new leader for queue " + queueName +
+                                    " with term " + receivedTerm + " at address " + newLeader);
+                            queueAddressMap.put(queueName, newLeader);
                             terms.put(queueName, receivedTerm);
+
                             electionHandler.cancelElectionTimeout(queueName);
-                            electionHandler.resetElectionTimeout(queueName);
-                            System.out.println("[INFO]: New leader elected for queue " + queueName + " with term " + receivedTerm);
+
+                            if (!newLeader.equals(brokerAddress)) {
+                                electionHandler.resetElectionTimeout(queueName);
+
+                            }
+                        }
+                        else if (receivedTerm == terms.get(queueName) &&
+                                !newLeader.equals(queueAddressMap.getOrDefault(queueName, null)) &&
+                                !(packet.getAddress().equals(LocalIP.getLocalIP()) &&
+                                        receivedInterBrokerMessage.getPort() == port)) {
+
+                            if (newLeader.getPort() > brokerAddress.getPort()) {
+                                System.out.println("[INFO]: [Broker: " + port + "] Split vote detected for queue " +
+                                        queueName + ". Yielding to higher port broker.");
+                                queueAddressMap.put(queueName, newLeader);
+                                terms.put(queueName, receivedTerm);
+                                electionHandler.cancelElectionTimeout(queueName);
+                                electionHandler.resetElectionTimeout(queueName);
+                            }
                         }
                     }
                 }
