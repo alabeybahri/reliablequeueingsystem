@@ -28,11 +28,11 @@ public class Broker {
     private static final int CLIENT_MULTICAST_PORT = 5010;
     private static final String BROKER_MULTICAST_ADDRESS = "239.255.0.1";
     private static final int BROKER_MULTICAST_PORT = 5020;
-    private static final int MIN_FAILURE_TIMEOUT = 1000;
-    private static final int MAX_FAILURE_TIMEOUT = 2000;
+    private static final int MIN_FAILURE_TIMEOUT = 500;
+    private static final int MAX_FAILURE_TIMEOUT = 1000;
     private static final int NUM_ALLOWED_MISSED_PINGS = 3;
-    private static final int PING_JITTER = 1000;
-    private static final int CONSECUTIVE_FAILURE_LIMIT = 10;
+    private static final int PING_JITTER = 50;
+    private static final int CONSECUTIVE_FAILURE_LIMIT = 5;
     private final int FAILURE_TIMEOUT;
     private int SEND_PING_INTERVAL;
     public Random random;
@@ -158,7 +158,7 @@ public class Broker {
         try {
             boolean allDone = latch.await(10, TimeUnit.SECONDS);
             if (!allDone) {
-                System.out.println("[ERROR]: Timeout waiting for ping replies");
+                System.err.println("[ERROR]: Timeout waiting for ping replies");
             }
 
         } catch (InterruptedException e) {
@@ -168,7 +168,7 @@ public class Broker {
         if (successCount.get()  == replicationBrokers.get(queueName).size() && !replicationBrokers.get(queueName).isEmpty()) {
 //            System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
         } else if (!replicationBrokers.get(queueName).isEmpty()) {
-            System.out.println("[INFO]: [Broker: " + port +  "] Not received all the ACKs.");
+            System.err.println("[INFO]: [Broker: " + port +  "] Not received all the ACKs.");
         }
         executor.shutdown();
 
@@ -198,7 +198,7 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-//            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName) + ": " + (response.getMessageType() == MessageType.ACK));
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName) + ": " + (response.getMessageType() == MessageType.ACK));
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
@@ -371,7 +371,7 @@ public class Broker {
         List<Pair<Address, Integer>> shuffledBrokers;
         int replicationCount;
         synchronized(knownBrokersLock) {
-            replicationCount = knownBrokers.size(); // (knownBrokers.size() + 1) / 2;
+            replicationCount = (knownBrokers.size() + 1) / 2;
             if (replicationCount < 1) {
                 System.out.println("[INFO]: Not enough brokers to replicate queue: " + queueName);
                 return -1;
@@ -479,26 +479,56 @@ public class Broker {
         ExecutorService executor = Executors.newFixedThreadPool(replicationCount);
         AtomicInteger successCount = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(replicationCount);
+
         for (Pair<Address, Integer> brokerToSend : brokersToSend) {
             executor.submit(() -> {
                 try {
                     boolean ackReceived = false;
-                    if (requestType.equals(Operation.WRITE)){
-                        ackReceived = sendAppendMessageRequestWithClientId(request, brokerToSend.first, originalClientId);
-                    } else if (requestType.equals(Operation.READ)){
-                        ackReceived = sendReadMessageRequestWithClientId(request, brokerToSend.first, originalClientId);
+                    int maxRetries = 3;
+                    int attempts = 0;
+
+                    while (!ackReceived && attempts < maxRetries) {
+                        attempts++;
+                        try {
+                            if (requestType.equals(Operation.WRITE)) {
+                                ackReceived = sendAppendMessageRequestWithClientId(request, brokerToSend.first, originalClientId);
+                            } else if (requestType.equals(Operation.READ)) {
+                                ackReceived = sendReadMessageRequestWithClientId(request, brokerToSend.first, originalClientId);
+                            }
+
+                            if (ackReceived) {
+                                successCount.incrementAndGet();
+                                break;
+                            } else if (attempts < maxRetries) {
+                                // Only log retry attempts, not final failure
+                                System.out.println("[INFO]: Replication attempt " + attempts + " failed for " + brokerToSend.first +
+                                        ", retrying in " + (attempts * 500) + "ms...");
+                                Thread.sleep(attempts * 500); // Exponential backoff
+                            }
+                        } catch (Exception e) {
+                            if (attempts < maxRetries) {
+                                System.err.println("[ERROR]: Replication attempt " + attempts + " failed for " + brokerToSend +
+                                        ": " + e.getMessage() + ", retrying...");
+                                Thread.sleep(attempts * 500); // Exponential backoff
+                            } else {
+                                // Final attempt failed
+                                System.err.println("[ERROR]: All replication attempts failed for " + brokerToSend +
+                                        ": " + e.getMessage());
+                            }
+                        }
                     }
 
-                    if (ackReceived) {
-                        successCount.incrementAndGet();
+                    if (!ackReceived) {
+                        System.err.println("[ERROR]: Failed to replicate after " + maxRetries + " attempts to " + brokerToSend.first);
                     }
                 } catch (Exception e) {
-                    System.err.println("[ERROR]: Append/Read replication failed for " + brokerToSend + ": " + e.getMessage());
+                    System.err.println("[ERROR]: Unexpected error in replication thread for " + brokerToSend + ": " + e.getMessage());
                 } finally {
                     latch.countDown();
                 }
             });
         }
+
         try {
             boolean allDone = latch.await(10, TimeUnit.SECONDS); // Overall timeout
             if (!allDone) {
