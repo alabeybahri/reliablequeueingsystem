@@ -51,9 +51,14 @@ public class Address implements Serializable {
     }
 
 
-    private String normalizeHost(String host) {
+    private static String normalizeHost(String host) {
         if (host == null) return null;
         return host.startsWith("/") ? host.substring(1) : host;
+    }
+
+    public static Address normalizeAddress(Address address) {
+        if (address == null) return null;
+        return new Address(normalizeHost(address.host), address.port);
     }
 
 }

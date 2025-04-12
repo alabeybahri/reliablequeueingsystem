@@ -144,21 +144,33 @@ public class ConnectionHandler implements Runnable {
     }
 
     private void handleQueueRead(Message request, Message response) {
-        if (this.broker.queues.get(request.getQueueName()) == null) {
-            Address leaderAddressObject = this.broker.queueAddressMap.get(request.getQueueName());
-            String leaderAddress = leaderAddressObject != null ? leaderAddressObject.toString() : null;
+        String queueName = request.getQueueName();
+
+        if (this.broker.queues.get(queueName) == null) {
+            Address leaderAddress = this.broker.queueAddressMap.get(queueName);
+
             if (leaderAddress == null) {
                 response.setResponseType(ResponseType.ERROR);
-                response.setResponseMessage("There is no queue");
+                response.setResponseMessage("There is no queue with name: " + queueName);
+                return;
             }
-            else {
+
+            InterBrokerMessage leaderResponse = broker.forwardClientReadMessage(Address.normalizeAddress(leaderAddress), queueName, request.getClientId());
+
+            System.out.println("[INFO]: Received leader response data: " + leaderResponse.getData());
+            System.out.println("[INFO]: Received leader response type: " + leaderResponse.getMessageType());
+
+            if (leaderResponse.getMessageType() == MessageType.ACK) {
                 response.setResponseType(ResponseType.SUCCESS);
-                response.setResponseMessage("This broker is not the leader of this queue, leader is: " + leaderAddress);
+                response.setResponseData(leaderResponse.getData());
+            } else {
+                response.setResponseType(ResponseType.ERROR);
+                response.setResponseMessage("No more messages");
             }
         }
         else {
-            List<Integer> queue = broker.queues.get(request.getQueueName());
-            Map<String, Integer> offsets = broker.clientOffsets.computeIfAbsent(request.getQueueName(), k -> new HashMap<>());
+            List<Integer> queue = broker.queues.get(queueName);
+            Map<String, Integer> offsets = broker.clientOffsets.computeIfAbsent(queueName, k -> new HashMap<>());
             int offset = offsets.getOrDefault(request.getClientId(), 0);
             if (offset < queue.size()) {
                 Integer value = queue.get(offset);
@@ -172,6 +184,8 @@ public class ConnectionHandler implements Runnable {
             }
         }
     }
+
+
 
     private Message processClientRequest(Message request) throws IOException {
         String type = request.getType();
@@ -224,6 +238,10 @@ public class ConnectionHandler implements Runnable {
                 break;
             case ACK:
                 break;
+            case BROKER_READ:
+                System.out.println("received the forwarded broker read message");
+                handleBrokerReadMessage(request, response);
+                break;
             case PING:
                 handlePingMessage(request, response);
                 break;
@@ -237,34 +255,62 @@ public class ConnectionHandler implements Runnable {
         return response;
     }
 
+    private void handleBrokerReadMessage(InterBrokerMessage request, InterBrokerMessage response) {
+        String queueName = request.getQueueName();
+        String originalClientId = request.getOriginalClientId();
+
+        if (this.broker.queues.get(queueName) == null) {
+            response.setMessageType(MessageType.NACK);
+            response.setData(-1);
+            return;
+        }
+
+        List<Integer> queue = broker.queues.get(queueName);
+        Map<String, Integer> offsets = broker.clientOffsets.computeIfAbsent(queueName, k -> new HashMap<>());
+        int offset = offsets.getOrDefault(originalClientId, 0);
+
+        if (offset < queue.size()) {
+            Integer value = queue.get(offset);
+            offsets.put(originalClientId, offset + 1);
+
+            Message dummyMessage = new Message();
+            dummyMessage.setQueueName(queueName);
+            dummyMessage.setType(Operation.READ);
+
+
+            //broker.updateReplications(dummyMessage, originalClientId);
+
+            response.setMessageType(MessageType.ACK);
+            response.setData(value);
+        } else {
+            response.setMessageType(MessageType.NACK);
+            response.setData(-1);
+        }
+    }
+
     private void handleElectionMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
         int requestTerm = request.getTerm();
 
-        // Initialize term for queue if not present
         if (!broker.terms.containsKey(queueName)) {
             broker.terms.put(queueName, 0);
         }
         int currentTerm = broker.terms.get(queueName);
 
-        // Vote granted if the candidate's term is >= our term
         if (requestTerm > currentTerm) {
             broker.terms.put(queueName, requestTerm);
             response.setMessageType(MessageType.VOTE);
             response.setVote(true);
 
-            // Reset our timeout since we've voted for a new leader
             broker.electionHandler.cancelElectionTimeout(queueName);
             broker.electionHandler.resetElectionTimeout(queueName);
 
-            // Record that we voted in this term
             broker.votesGranted.computeIfAbsent(queueName, k -> new HashSet<>()).add(requestTerm);
 
             System.out.println("[INFO]: [Broker: " + broker.port + "] Vote granted for " + queueName + " with term " + requestTerm);
             return;
         }
 
-        // If we've already voted for this term or our term is higher, reject
         response.setMessageType(MessageType.VOTE);
         response.setVote(false);
         System.out.println("[INFO]: [Broker: " + broker.port + "] Vote denied for " + queueName + " with term " + requestTerm + ", our term: " + currentTerm);
@@ -273,7 +319,6 @@ public class ConnectionHandler implements Runnable {
     private void handleReplicationRequest(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
 
-        // Check if queue already exists
         if (this.broker.queues.get(queueName) != null) {
             System.out.println("Leader of this queue, should not take this replication request: " + queueName);
             response.setMessageType(MessageType.NACK);
@@ -286,7 +331,7 @@ public class ConnectionHandler implements Runnable {
         broker.replicationClientOffsets.put(queueName, replicationOffset);
         List<Address> otherFollowers = new ArrayList<>(request.getFollowerAddresses());
         otherFollowers.remove(broker.brokerAddress);
-        broker.otherFollowers.put(request.getQueueName(), otherFollowers); // store the other follower addresses
+        broker.otherFollowers.put(request.getQueueName(), otherFollowers);
         response.setMessageType(MessageType.ACK);
         System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName);
         broker.electionHandler.createElectionTimeout(request.getQueueName()); //create scheduler in the pool, start timeout
@@ -295,13 +340,11 @@ public class ConnectionHandler implements Runnable {
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
 
-        // Check if this is a replication queue
         if (this.broker.replications.get(queueName) == null) {
             System.out.println("[INFO]: [Broker:" + broker.port + "] Do not have this replication, cannot append message. Queue: " + queueName);
             return;
         }
 
-        // Append the message to the replicated queue
         broker.replications.get(queueName).add(request.getData());
         response.setMessageType(MessageType.ACK);
 
@@ -313,20 +356,17 @@ public class ConnectionHandler implements Runnable {
     private void handleReadMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
 
-        // Check if this is a replication queue
         if (this.broker.replications.get(queueName) == null) {
             System.out.println("Do not have this replication, cannot read message. Queue: " + queueName);
             return;
         }
 
-        // Find the original client ID for this replication
         String originalClientId = request.getOriginalClientId();
         if (originalClientId == null) {
             System.out.println("No original client ID provided for replication read");
             return;
         }
 
-        // Update replication client offsets
         Map<String, Integer> queueOffsets = broker.replicationClientOffsets
                 .computeIfAbsent(queueName, k -> new HashMap<>());
 
@@ -334,43 +374,19 @@ public class ConnectionHandler implements Runnable {
         List<Integer> replicatedQueue = broker.replications.get(queueName);
 
         if (currentOffset < replicatedQueue.size()) {
-            // Successfully read from replication queue
             response.setMessageType(MessageType.ACK);
             response.setData(replicatedQueue.get(currentOffset));
 
-            // Increment offset for this client
             queueOffsets.put(originalClientId, currentOffset + 1);
 
             System.out.println("Replicated queue " + queueName +
                     ": read data " + replicatedQueue.get(currentOffset) +
                     " for client " + originalClientId);
         } else {
-            // No more messages to read
             response.setMessageType(MessageType.NACK);
             System.out.println("No more messages in replicated queue " + queueName);
         }
     }
-
-//    private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
-//        String queueName = request.getQueueName();
-//        broker.electionHandler.resetElectionTimeout(queueName);
-//        int currentTerm = broker.terms.get(queueName);
-//        int receivingTerm = request.getTerm();
-//        List<Address> newOtherFollowerAddresses = request.getFollowerAddresses();
-//        newOtherFollowerAddresses.remove(broker.brokerAddress);
-//        broker.otherFollowers.put(queueName, newOtherFollowerAddresses);
-//
-//        // leader has changed
-//        if (receivingTerm > currentTerm) {
-//           broker.terms.put(queueName, receivingTerm);
-//           broker.queueAddressMap.put(queueName, request.getLeader());
-//           response.setMessageType(MessageType.ACK);
-//           return;
-//        }
-//
-//
-//        response.setMessageType(MessageType.ACK);
-//    }
 
     private void handlePingMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();

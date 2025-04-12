@@ -221,10 +221,6 @@ public class Broker {
     }
 
 
-    /**
-     * Sends datagram packet to multicast group to notify newly created queue.
-     * @param queueName newly created queue name.
-     */
     public void updateQueueAddressMap(String queueName, MessageType messageType, int term) throws IOException {
         InterBrokerMessage interBrokerMessage = new InterBrokerMessage();
         interBrokerMessage.setQueueName(queueName);
@@ -500,10 +496,9 @@ public class Broker {
                                 successCount.incrementAndGet();
                                 break;
                             } else if (attempts < maxRetries) {
-                                // Only log retry attempts, not final failure
                                 System.out.println("[INFO]: Replication attempt " + attempts + " failed for " + brokerToSend.first +
                                         ", retrying in " + (attempts * 500) + "ms...");
-                                Thread.sleep(attempts * 500); // Exponential backoff
+                                Thread.sleep(attempts * 500);
                             }
                         } catch (Exception e) {
                             if (attempts < maxRetries) {
@@ -511,7 +506,7 @@ public class Broker {
                                         ": " + e.getMessage() + ", retrying...");
                                 Thread.sleep(attempts * 500); // Exponential backoff
                             } else {
-                                // Final attempt failed
+
                                 System.err.println("[ERROR]: All replication attempts failed for " + brokerToSend +
                                         ": " + e.getMessage());
                             }
@@ -642,25 +637,66 @@ public class Broker {
         return null;
     }
 
-    private synchronized Socket getOrCreateBrokerSocket(Address brokerAddress) throws IOException {
-        // Check if socket already exists and is valid
+    public InterBrokerMessage forwardClientReadMessage(Address broker, String queueName, String originalClientId){
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
+
+            InterBrokerMessage readRequest = new InterBrokerMessage();
+            readRequest.setMessageType(MessageType.BROKER_READ);
+            readRequest.setQueueName(queueName);
+            readRequest.setOriginalClientId(originalClientId);
+            out.writeObject(readRequest);
+            out.flush();
+
+            socket.setSoTimeout(5000);
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            if (response.getMessageType() == MessageType.ACK) {
+                System.out.println("[INFO]: [Broker: " + port + "] ACK received for forwarding read message request, queue:" + readRequest.getQueueName() + " from" + broker);
+            }
+
+
+            return response;
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("[ERROR]: Forward read message to leader failed for " + broker );
+
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("[ERROR]: closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
+            return null;
+        }
+
+    }
+
+    public synchronized Socket getOrCreateBrokerSocket(Address brokerAddress) throws IOException {
         Socket existingSocket = brokerSocketPool.get(brokerAddress);
         if (existingSocket != null && !existingSocket.isClosed() && existingSocket.isConnected()) {
             return existingSocket;
         }
 
-        // Create new socket
         Socket newSocket = new Socket(brokerAddress.getHost(), brokerAddress.getPort());
         ObjectOutputStream out = new ObjectOutputStream(newSocket.getOutputStream());
         ObjectInputStream in = new ObjectInputStream(newSocket.getInputStream());
 
-        // Store socket and streams
         brokerSocketPool.put(brokerAddress, newSocket);
         brokerOutputStreams.put(brokerAddress, out);
         brokerInputStreams.put(brokerAddress, in);
 
         return newSocket;
     }
+
 
     private void initializeConnectionCleanup() {
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
