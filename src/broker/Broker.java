@@ -680,6 +680,51 @@ public class Broker {
 
     }
 
+    public InterBrokerMessage forwardClientWriteMessage(Address broker, String queueName, Message request) {
+        try {
+            Socket socket = getOrCreateBrokerSocket(broker);
+            ObjectOutputStream out = brokerOutputStreams.get(broker);
+            ObjectInputStream in = brokerInputStreams.get(broker);
+
+            InterBrokerMessage writeRequest = new InterBrokerMessage();
+            writeRequest.setMessageType(MessageType.BROKER_WRITE);
+            writeRequest.setQueueName(queueName);
+            writeRequest.setOriginalClientId(request.getClientId());
+            writeRequest.setData(request.getValue());
+
+            out.writeObject(writeRequest);
+            out.flush();
+
+            socket.setSoTimeout(5000);
+
+            InterBrokerMessage response = (InterBrokerMessage) in.readObject();
+            if (response.getMessageType() == MessageType.ACK) {
+                System.out.println("[INFO]: [Broker: " + port + "] ACK received for forwarding write message request, queue:" + writeRequest.getQueueName() + " from" + broker);
+            }
+
+
+            return response;
+
+        } catch (IOException | ClassNotFoundException e) {
+            System.err.println("[ERROR]: Forward write message to leader failed for " + broker );
+
+            // Remove problematic socket from pool
+            synchronized (brokerSocketLock) {
+                Socket socket = brokerSocketPool.remove(broker);
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeEx) {
+                    System.err.println("[ERROR]: closing socket: " + closeEx.getMessage());
+                }
+                brokerOutputStreams.remove(broker);
+                brokerInputStreams.remove(broker);
+            }
+
+            return null;
+        }
+
+    }
+
     public synchronized Socket getOrCreateBrokerSocket(Address brokerAddress) throws IOException {
         Socket existingSocket = brokerSocketPool.get(brokerAddress);
         if (existingSocket != null && !existingSocket.isClosed() && existingSocket.isConnected()) {
@@ -755,6 +800,7 @@ public class Broker {
             knownBrokers = updatedBrokers;
         }
     }
+
 
 
 }

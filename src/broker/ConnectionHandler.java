@@ -124,15 +124,23 @@ public class ConnectionHandler implements Runnable {
     }
 
     private void handleQueueWrite(Message request, Message response) {
+        String queueName = request.getQueueName();
         if (this.broker.queues.get(request.getQueueName()) == null) {
-            Address leaderAddress = this.broker.queueAddressMap.get(request.getQueueName());
+            Address leaderAddress = this.broker.queueAddressMap.get(queueName);
             if (leaderAddress == null) {
                 response.setResponseType(ResponseType.ERROR);
-                response.setResponseMessage("There is no queue");
+                response.setResponseMessage("There is no queue with name :" + queueName);
             }
             else {
-                response.setResponseType(ResponseType.SUCCESS);
-                response.setResponseMessage("This broker is not the leader of this queue, leader is: " + leaderAddress);
+                InterBrokerMessage leaderResponse =  broker.forwardClientWriteMessage(Address.normalizeAddress(leaderAddress), queueName, request);
+
+                if (leaderResponse.getMessageType() == MessageType.ACK) {
+                    response.setResponseType(ResponseType.SUCCESS);
+                    response.setResponseMessage("Written successfully");
+                } else {
+                    response.setResponseType(ResponseType.ERROR);
+                    response.setResponseMessage("Error while processing queue write");
+                }
             }
         }
         else {
@@ -156,9 +164,6 @@ public class ConnectionHandler implements Runnable {
             }
 
             InterBrokerMessage leaderResponse = broker.forwardClientReadMessage(Address.normalizeAddress(leaderAddress), queueName, request.getClientId());
-
-            System.out.println("[INFO]: Received leader response data: " + leaderResponse.getData());
-            System.out.println("[INFO]: Received leader response type: " + leaderResponse.getMessageType());
 
             if (leaderResponse.getMessageType() == MessageType.ACK) {
                 response.setResponseType(ResponseType.SUCCESS);
@@ -239,8 +244,10 @@ public class ConnectionHandler implements Runnable {
             case ACK:
                 break;
             case BROKER_READ:
-                System.out.println("received the forwarded broker read message");
                 handleBrokerReadMessage(request, response);
+                break;
+            case BROKER_WRITE:
+                handleBrokerWriteMessage(request, response);
                 break;
             case PING:
                 handlePingMessage(request, response);
@@ -253,6 +260,28 @@ public class ConnectionHandler implements Runnable {
                 break;
         }
         return response;
+    }
+
+    private void handleBrokerWriteMessage(InterBrokerMessage request, InterBrokerMessage response) {
+        String queueName = request.getQueueName();
+
+        if (this.broker.queues.get(queueName) == null) {
+            response.setMessageType(MessageType.NACK);
+            response.setData(-1);
+            return;
+        }
+
+        broker.queues.get(request.getQueueName()).add(request.getData());
+
+        Message dummyMessage = new Message();
+        dummyMessage.setQueueName(queueName);
+        dummyMessage.setValue(request.getData());
+        dummyMessage.setType(Operation.WRITE);
+
+        broker.updateReplications(dummyMessage, request.getOriginalClientId());
+
+        response.setMessageType(MessageType.ACK);
+
     }
 
     private void handleBrokerReadMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -278,7 +307,7 @@ public class ConnectionHandler implements Runnable {
             dummyMessage.setType(Operation.READ);
 
 
-            //broker.updateReplications(dummyMessage, originalClientId);
+            broker.updateReplications(dummyMessage, originalClientId);
 
             response.setMessageType(MessageType.ACK);
             response.setData(value);
