@@ -116,7 +116,7 @@ public class ConnectionHandler implements Runnable {
             this.broker.queueAddressMap.put(request.getQueueName(), this.broker.brokerAddress);
             broker.createReplication(request.getQueueName());
             response.setResponseType(ResponseType.SUCCESS);
-            response.setResponseMessage("Successfully added a queue with this name");
+            response.setResponseMessage("Successfully added a queue with name " + request.getQueueName());
             broker.terms.put(request.getQueueName(), 1);
             broker.updateQueueAddressMap(request.getQueueName(), MessageType.NEW_QUEUE, 1);
             broker.startPeriodicPingFollowers(request.getQueueName());
