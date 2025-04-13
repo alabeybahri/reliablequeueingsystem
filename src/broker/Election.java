@@ -150,7 +150,6 @@ public class Election {
     }
 
     private void becomeLeader(String queueName, int newTerm, List<Address> otherFollowers) throws IOException {
-        System.out.println("[INFO]: [Broker: " + broker.port +  "] New leader for " + queueName + " with term " + newTerm);
         cancelElectionTimeout(queueName);
         broker.queueAddressMap.replace(queueName, this.broker.brokerAddress);
         broker.updateQueueAddressMap(queueName, MessageType.LEADER_ANNOUNCEMENT, newTerm);

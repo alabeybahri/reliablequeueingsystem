@@ -29,7 +29,7 @@ public class ConnectionHandler implements Runnable {
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
         } catch (IOException e) {
-            System.out.println("Connection error");
+            System.err.println("[ERROR]: Connection error");
         }
     }
 
@@ -38,60 +38,48 @@ public class ConnectionHandler implements Runnable {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    // Set a timeout to prevent blocking forever
-                    socket.setSoTimeout(30000); // 30 seconds timeout
+                    socket.setSoTimeout(30000);
 
-                    // Read the next object
                     Object request = in.readObject();
                     if (request == null) {
-                        System.out.println("[INFO]: Received null request, closing connection");
+                        System.out.println("[INFO]: [Broker:" + broker.port + "] Received null request, closing connection");
                         break;
                     }
 
-                    // Process based on message type
                     if (request instanceof InterBrokerMessage) {
                         InterBrokerMessage brokerRequest = (InterBrokerMessage) request;
-//                        System.out.println("[DEBUG]: Processing broker request of type: " + brokerRequest.getMessageType());
 
                         InterBrokerMessage responseToBroker = processBrokerRequest(brokerRequest);
-                        out.reset(); // Reset to clear any cached references
+                        out.reset();
                         out.writeObject(responseToBroker);
                         out.flush();
 
                     } else if (request instanceof Message) {
                         Message clientRequest = (Message) request;
-//                        System.out.println("[DEBUG]: Processing client request");
-
                         Message responseToClient = processClientRequest(clientRequest);
-                        out.reset(); // Reset to clear any cached references
+                        out.reset();
                         out.writeObject(responseToClient);
                         out.flush();
 
                     } else {
-                        System.out.println("[WARNING]: Received unknown request type: " +
-                                (request != null ? request.getClass().getName() : "null"));
+                        System.err.println("[ERROR]: Received unknown request type.");
                     }
                 } catch (SocketTimeoutException e) {
-                    // This is normal, just continue the loop
                     continue;
                 } catch (EOFException e) {
-//                    System.out.println("[INFO]: Client disconnected: " + connectionAddress);
                     break;
                 } catch (ClassNotFoundException e) {
                     System.err.println("[ERROR]: Unknown object type received: " + e.getMessage());
-                    // Continue and try to read the next object
                 } catch (IOException e) {
                     System.err.println("[ERROR]: IO error while processing request: " + e.getMessage());
-                    // For IO errors, it's often better to close the connection
                     break;
                 } catch (Exception e) {
                     System.err.println("[ERROR]: Unexpected error processing request: " + e.getMessage());
-                    e.printStackTrace();
                     break;
                 }
             }
         } finally {
-            System.out.println("[INFO]: Connection handler exiting for: " + connectionAddress);
+            System.out.println("[INFO]: [Broker:" + broker.port + "] Connection handler exiting for: " + connectionAddress);
             broker.removeClient(connectionAddress);
             closeResources();
         }
@@ -349,7 +337,7 @@ public class ConnectionHandler implements Runnable {
         String queueName = request.getQueueName();
 
         if (this.broker.queues.get(queueName) != null) {
-            System.out.println("Leader of this queue, should not take this replication request: " + queueName);
+            System.err.println("[ERROR]: [Broker:" + broker.port + "] Leader of this queue, should not take this replication request: " + queueName);
             response.setMessageType(MessageType.NACK);
             return;
         }
@@ -363,7 +351,7 @@ public class ConnectionHandler implements Runnable {
         broker.otherFollowers.put(request.getQueueName(), otherFollowers);
         response.setMessageType(MessageType.ACK);
         System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName);
-        broker.electionHandler.createElectionTimeout(request.getQueueName()); //create scheduler in the pool, start timeout
+        broker.electionHandler.createElectionTimeout(request.getQueueName());
     }
 
     private void handleAppendMessage(InterBrokerMessage request, InterBrokerMessage response) {
@@ -377,22 +365,20 @@ public class ConnectionHandler implements Runnable {
         broker.replications.get(queueName).add(request.getData());
         response.setMessageType(MessageType.ACK);
 
-        System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName +
-                ": data " + request.getData() +
-                " added to replication");
+        System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName + ", " + request.getData() + " added to replication");
     }
 
     private void handleReadMessage(InterBrokerMessage request, InterBrokerMessage response) {
         String queueName = request.getQueueName();
 
         if (this.broker.replications.get(queueName) == null) {
-            System.out.println("Do not have this replication, cannot read message. Queue: " + queueName);
+            System.err.println("[ERROR]: [Broker:" + broker.port + "]Do not have this replication, cannot read message. Queue: " + queueName);
             return;
         }
 
         String originalClientId = request.getOriginalClientId();
         if (originalClientId == null) {
-            System.out.println("No original client ID provided for replication read");
+            System.err.println("[ERROR]: [Broker:" + broker.port + "] No original client ID provided for replication read");
             return;
         }
 
@@ -408,12 +394,10 @@ public class ConnectionHandler implements Runnable {
 
             queueOffsets.put(originalClientId, currentOffset + 1);
 
-            System.out.println("Replicated queue " + queueName +
-                    ": read data " + replicatedQueue.get(currentOffset) +
-                    " for client " + originalClientId);
+            System.out.println("[INFO]: [Broker:" + broker.port + "] Replicated queue " + queueName + ": read data " + replicatedQueue.get(currentOffset) + " for client " + originalClientId);
         } else {
             response.setMessageType(MessageType.NACK);
-            System.out.println("No more messages in replicated queue " + queueName);
+            System.out.println("[INFO]: [Broker:" + broker.port + "] No more messages in replicated queue " + queueName);
         }
     }
 
@@ -428,20 +412,15 @@ public class ConnectionHandler implements Runnable {
         newOtherFollowerAddresses.remove(broker.brokerAddress);
         broker.otherFollowers.put(queueName, newOtherFollowerAddresses);
 
-        // If we receive a ping from a valid leader with equal or higher term
         if (receivingTerm >= currentTerm) {
-            // Update our term if necessary
             broker.terms.put(queueName, receivingTerm);
-            // Update our leader information
             broker.queueAddressMap.put(queueName, request.getLeader());
-            // Reset election timeout since we have a valid leader
             broker.electionHandler.cancelElectionTimeout(queueName);
             broker.electionHandler.resetElectionTimeout(queueName);
             response.setMessageType(MessageType.ACK);
             return;
         }
 
-        // If we receive a ping with lower term, we still ACK it but don't update our state
         response.setMessageType(MessageType.ACK);
     }
 

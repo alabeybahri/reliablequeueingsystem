@@ -87,7 +87,7 @@ public class Client {
         }
 
         System.out.println("[INFO]: Brokers are updated. Found " + currentBrokers.size() + " brokers.");
-        System.out.println("[INFO]: You can connect any of them by specifying the broker index. 1 to " + currentBrokers.size());
+        System.out.println("[INFO]: You can connect any of them by specifying the broker index. Starts from 1.");
         System.out.print("[INFO]: Current brokers: " + brokerCache);
         if (showSymbol) {
             System.out.print("\n> ");

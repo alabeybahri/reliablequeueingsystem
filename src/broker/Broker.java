@@ -83,7 +83,7 @@ public class Broker {
 
     public synchronized void removeClient(String clientId) {
         clientOffsets.remove(clientId);
-        System.out.println("[INFO]: [Broker:" + port+ "] Client disconnected: " + clientId);
+        System.out.println("[INFO]: [Broker:" + port+ "] Disconnected. : " + clientId);
     }
 
     private void startPeriodicPing() {
@@ -125,7 +125,6 @@ public class Broker {
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
         brokerMulticastSocket.send(datagramPacket);
-//        System.out.println("[INFO]: [Broker: " + port +  "] Sent healthcheck to " + BROKER_MULTICAST_ADDRESS + ":" + BROKER_MULTICAST_PORT);
         incrementMissedACKsAndCleanup();
     }
 
@@ -145,7 +144,7 @@ public class Broker {
                         follower.second++;
                         if (follower.second >= CONSECUTIVE_FAILURE_LIMIT) {
                             replicationBrokers.get(queueName).remove(follower);
-                            System.out.println("[INFO]: Follower failed to respond, removing it from replications :" + follower.first );
+                            System.out.println("[INFO]: [Broker: " + port+ "] Follower failed to respond, removing it from replications :" + follower.first );
                         }
                     }
                 } catch (Exception e) {
@@ -166,9 +165,9 @@ public class Broker {
         }
 
         if (successCount.get()  == replicationBrokers.get(queueName).size() && !replicationBrokers.get(queueName).isEmpty()) {
-//            System.out.println("[INFO]: [Broker: " + port +  "] Successfully got ACKs from all followers follower count: " + successCount.get() + " from " + replicationBrokers.get(queueName).size() + " followers");
+            System.out.println("[INFO]: [Broker: " + port + "] Successfully got ACKs from all followers. " + successCount.get() + "/" + replicationBrokers.get(queueName).size() + " For queue: " + queueName);
         } else if (!replicationBrokers.get(queueName).isEmpty()) {
-            System.err.println("[INFO]: [Broker: " + port +  "] Not received all the ACKs.");
+            System.err.println("[INFO]: [Broker: " + port + "] Not received all the ACKs for the queue: " + queueName + " Received: " + successCount.get() + "/" + replicationBrokers.get(queueName).size());
         }
         executor.shutdown();
 
@@ -198,11 +197,10 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for PING " + follower + " for queue : " + queueName + " for term : " + terms.get(queueName) + ": " + (response.getMessageType() == MessageType.ACK));
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[INFO]: [Broker: " + port + "] ACK not received from" + follower);
+            System.err.println("[INFO]: [Broker: " + port + "] ACK not received from follower: " + follower);
 
             // Remove problematic socket from pool
             synchronized (brokerSocketLock) {
@@ -210,7 +208,7 @@ public class Broker {
                 try {
                     if (socket != null) socket.close();
                 } catch (IOException closeEx) {
-                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                    System.err.println("[ERROR]: Error while closing socket: " + closeEx.getMessage());
                     return false;
                 }
                 brokerOutputStreams.remove(follower);
@@ -231,7 +229,7 @@ public class Broker {
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket packet = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), BROKER_MULTICAST_PORT);
         brokerMulticastSocket.send(packet);
-        System.out.println("[INFO]: [Broker: " + port +  "] Updated queue address map added " + queueName + " leader: " + brokerAddress + " with term: " + term);
+        System.out.println("[INFO]: [Broker: " + port +  "] Now the leader of the queue: " + queueName + " with term: " + term);
     }
 
     private void sendPingResponse() throws IOException {
@@ -241,7 +239,6 @@ public class Broker {
         byte[] messageBytes = interBrokerMessage.serializeToBytes();
         DatagramPacket datagramPacket = new DatagramPacket(messageBytes, messageBytes.length, brokerGroup.getAddress(), brokerGroup.getPort());
         brokerMulticastSocket.send(datagramPacket);
-//        System.out.println("[INFO]: [Broker: " + port + "] Responded to ping request with " + interBrokerMessage.getPort());
     }
 
     private void startMulticastListener() {
@@ -266,7 +263,6 @@ public class Broker {
                                 responseBytes, responseBytes.length, packet.getAddress(), packet.getPort()
                         );
                         multicastSocket.send(responsePacket);
-//                        System.out.println("[INFO]: [Broker: " + port +  "] Responded to discovery request with " + response);
                     }
 
                 }
@@ -316,8 +312,7 @@ public class Broker {
                         Address newLeader = receivedInterBrokerMessage.getLeader();
 
                         if (!terms.containsKey(queueName) || receivedTerm > terms.get(queueName)) {
-                            System.out.println("[INFO]: [Broker: " + port + "] Accepting new leader for queue " + queueName +
-                                    " with term " + receivedTerm + " at address " + newLeader);
+                            System.out.println("[INFO]: [Broker: " + port + "] Accepting new leader for queue " + queueName + " with term " + receivedTerm + " at address " + newLeader);
                             queueAddressMap.put(queueName, newLeader);
                             terms.put(queueName, receivedTerm);
 
@@ -334,8 +329,7 @@ public class Broker {
                                         receivedInterBrokerMessage.getPort() == port)) {
 
                             if (newLeader.getPort() > brokerAddress.getPort()) {
-                                System.out.println("[INFO]: [Broker: " + port + "] Split vote detected for queue " +
-                                        queueName + ". Yielding to higher port broker.");
+                                System.out.println("[INFO]: [Broker: " + port + "] Split vote detected for queue " + queueName + ". Yielding to higher port broker.");
                                 queueAddressMap.put(queueName, newLeader);
                                 terms.put(queueName, receivedTerm);
                                 electionHandler.cancelElectionTimeout(queueName);
@@ -404,7 +398,7 @@ public class Broker {
         try {
             boolean allDone = latch.await(10, TimeUnit.SECONDS); // Overall timeout
             if (!allDone) {
-                System.out.println("[ERROR]: Timeout waiting for replications");
+                System.err.println("[ERROR]: Timeout waiting for replications");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -436,7 +430,7 @@ public class Broker {
             socket.setSoTimeout(5000); // 5 seconds for ACK
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for replication message request, queue:" + request.getQueueName() + " from" + broker);
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for replication message request, queue:" + request.getQueueName() + " from " + broker);
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
@@ -496,19 +490,15 @@ public class Broker {
                                 successCount.incrementAndGet();
                                 break;
                             } else if (attempts < maxRetries) {
-                                System.out.println("[INFO]: Replication attempt " + attempts + " failed for " + brokerToSend.first +
-                                        ", retrying in " + (attempts * 500) + "ms...");
+                                System.err.println("[INFO]: Replication attempt " + attempts + " failed for " + brokerToSend.first + ", retrying in " + (attempts * 500) + "ms...");
                                 Thread.sleep(attempts * 500);
                             }
                         } catch (Exception e) {
                             if (attempts < maxRetries) {
-                                System.err.println("[ERROR]: Replication attempt " + attempts + " failed for " + brokerToSend +
-                                        ": " + e.getMessage() + ", retrying...");
-                                Thread.sleep(attempts * 500); // Exponential backoff
+                                System.err.println("[ERROR]: Replication attempt " + attempts + " failed for " + brokerToSend + ": " + e.getMessage() + ", retrying...");
+                                Thread.sleep(attempts * 500);
                             } else {
-
-                                System.err.println("[ERROR]: All replication attempts failed for " + brokerToSend +
-                                        ": " + e.getMessage());
+                                System.err.println("[ERROR]: All replication attempts failed for " + brokerToSend + ": " + e.getMessage());
                             }
                         }
                     }
@@ -525,7 +515,7 @@ public class Broker {
         }
 
         try {
-            boolean allDone = latch.await(10, TimeUnit.SECONDS); // Overall timeout
+            boolean allDone = latch.await(10, TimeUnit.SECONDS);
             if (!allDone) {
                 System.out.println("[ERROR]: Timeout waiting for replications");
             }
@@ -553,7 +543,7 @@ public class Broker {
             socket.setSoTimeout(5000);
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
-            System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request, queue:" + replicationRequest.getQueueName() + " from" + broker);
+            System.out.println("[INFO]: [Broker: " + port + "] ACK received for append message request, queue:" + replicationRequest.getQueueName() + " from " + broker);
             return response.getMessageType() == MessageType.ACK;
 
         } catch (IOException | ClassNotFoundException e) {
@@ -565,7 +555,7 @@ public class Broker {
                 try {
                     if (socket != null) socket.close();
                 } catch (IOException closeEx) {
-                    System.err.println("Error closing socket: " + closeEx.getMessage());
+                    System.err.println("[ERROR]: Error when closing socket: " + closeEx.getMessage());
                 }
                 brokerOutputStreams.remove(broker);
                 brokerInputStreams.remove(broker);
@@ -592,7 +582,7 @@ public class Broker {
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
             if (response.getMessageType() == MessageType.ACK) {
-                System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request, queue:" + readRequest.getQueueName() + " from" + broker);
+                System.out.println("[INFO]: [Broker: " + port + "] ACK received for read message request, queue:" + readRequest.getQueueName() + " from " + broker);
             }
             return response.getMessageType() == MessageType.ACK;
 
@@ -654,14 +644,14 @@ public class Broker {
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
             if (response.getMessageType() == MessageType.ACK) {
-                System.out.println("[INFO]: [Broker: " + port + "] ACK received for forwarding read message request, queue:" + readRequest.getQueueName() + " from" + broker);
+                System.out.println("[INFO]: [Broker: " + port + "] Forwarded read message request, queue:" + readRequest.getQueueName() + " to leader: " + broker);
             }
 
 
             return response;
 
         } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[ERROR]: Forward read message to leader failed for " + broker );
+            System.err.println("[ERROR]: Forward read message to leader failed. " + broker );
 
             // Remove problematic socket from pool
             synchronized (brokerSocketLock) {
@@ -699,7 +689,7 @@ public class Broker {
 
             InterBrokerMessage response = (InterBrokerMessage) in.readObject();
             if (response.getMessageType() == MessageType.ACK) {
-                System.out.println("[INFO]: [Broker: " + port + "] ACK received for forwarding write message request, queue:" + writeRequest.getQueueName() + " from" + broker);
+                System.out.println("[INFO]: [Broker: " + port + "] ACK received for forwarding write message request, queue:" + writeRequest.getQueueName() + " from " + broker);
             }
 
 
@@ -758,7 +748,7 @@ public class Broker {
                     try {
                         socket.close();
                     } catch (IOException e) {
-                        System.err.println("Error closing socket: " + e.getMessage());
+                        System.err.println("[ERROR]: Error while closing socket: " + e.getMessage());
                     }
                     iterator.remove();
                     brokerOutputStreams.remove(entry.getKey());
